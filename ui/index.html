@@ -85,33 +85,26 @@
         <header class="top-hud">
             <div class="hud-left">
                 <span class="system-time" id="live-clock">--:--:--</span>
-                <span class="user-greeting">Welcome, <strong id="user-display-name">Guest</strong></span>
+                <span class="hud-divider">/</span>
+                <span class="hud-view-title">Command Center</span>
             </div>
             <div class="hud-center">
-                <div class="neural-core-wrapper" id="neural-core">
+                <div class="neural-core-wrapper" id="neural-core" title="Neural Core: Online">
                     <div class="core-ring core-outer"></div>
                     <div class="core-ring core-mid"></div>
                     <div class="core-center-orb"></div>
                 </div>
             </div>
             <div class="hud-right">
-                <a href="/download/windows-agent" class="btn btn-primary" id="btn-download-app" title="Download Windows Companion Device Agent (.exe)" download="AIVA-Device-Agent-Setup-1.0.0.exe" style="padding: 6px 14px; font-size: 13px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <a href="/download/windows-agent" class="hud-download-btn" id="btn-download-app" title="Download Windows Companion Agent (.exe)" download="AIVA-Device-Agent-Setup-1.0.0.exe">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                    <span>Download Windows App</span>
+                    <span>Download App</span>
                 </a>
-                <button class="hud-btn" id="btn-quick-inspect">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    Inspect Screen
-                </button>
-                <button class="hud-btn" id="btn-quick-screenshot">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    Screenshot
-                </button>
-                <button class="btn btn-ghost" id="btn-theme-toggle" title="Toggle Theme (Dark / Light / System)" style="padding: 6px 10px; font-size: 13px;">
+                <button class="hud-icon-btn" id="btn-theme-toggle" title="Toggle Theme (Dark / Light / System)">
                     <svg id="theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="5"/>
                         <line x1="12" y1="1" x2="12" y2="3"/>
@@ -124,12 +117,12 @@
                         <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
                     </svg>
                 </button>
-                <button class="btn btn-ghost" id="btn-web-logout" title="Log Out" style="display: none; padding: 6px 12px; font-size: 12px;">
-                    Log Out
-                </button>
-                <div class="api-health-pill">
-                    <span class="dot-green"></span>
-                    <span id="api-status-label">17 Keys Active</span>
+                <div class="user-pill" id="user-pill">
+                    <div class="user-avatar-sm" id="user-avatar-initials">C</div>
+                    <span class="user-name-label" id="user-display-name">Charan</span>
+                    <button class="btn-logout-icon" id="btn-web-logout" title="Log Out">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </button>
                 </div>
             </div>
         </header>
@@ -181,28 +174,36 @@
                     <p class="section-title">Quick Actions</p>
                     <div class="quick-tools-grid">
                         <button class="tool-card" onclick="triggerQuickCommand('what is currently on my screen?')">
-                            <span class="tool-icon">👁️</span>
+                            <span class="tool-icon">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/></svg>
+                            </span>
                             <div class="tool-meta">
                                 <strong>Inspect Screen</strong>
                                 <small>Gemini Vision</small>
                             </div>
                         </button>
                         <button class="tool-card" onclick="triggerQuickCommand('open youtube and search trending tech news')">
-                            <span class="tool-icon">▶</span>
+                            <span class="tool-icon">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            </span>
                             <div class="tool-meta">
                                 <strong>YouTube Search</strong>
                                 <small>Device Browser</small>
                             </div>
                         </button>
                         <button class="tool-card" onclick="triggerQuickCommand('open notepad')">
-                            <span class="tool-icon">📄</span>
+                            <span class="tool-icon">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                            </span>
                             <div class="tool-meta">
                                 <strong>Open Notepad</strong>
                                 <small>Windows App</small>
                             </div>
                         </button>
                         <button class="tool-card" onclick="triggerQuickCommand('set volume to 50')">
-                            <span class="tool-icon">🔊</span>
+                            <span class="tool-icon">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                            </span>
                             <div class="tool-meta">
                                 <strong>Set Volume</strong>
                                 <small>Device Audio</small>

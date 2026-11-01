@@ -122,6 +122,12 @@ function onAuthSuccess(user) {
         userNameDisplay.textContent = user.name || user.email.split('@')[0];
     }
 
+    const userAvatarInitials = document.getElementById('user-avatar-initials');
+    if (userAvatarInitials) {
+        const initial = (user.name || user.email.split('@')[0] || 'C').charAt(0).toUpperCase();
+        userAvatarInitials.textContent = initial;
+    }
+
     // Load fresh data for this authenticated user
     loadMemoryData();
     loadConversationHistory();
@@ -573,24 +579,121 @@ async function sendUserMessage(query) {
     }
 }
 
+function renderMarkdown(text) {
+    if (!text) return '';
+    if (typeof text !== 'string') text = String(text);
+    if (text.startsWith('<div class="typing-dots"')) return text;
+
+    const isError = text.trim().startsWith('⚠️') || text.trim().startsWith('Error:');
+
+    let cleanText = text
+        .replace(/\s*---\s*/g, '\n\n---\n\n')
+        .replace(/\s*(#{1,6}\s+)/g, '\n\n$1')
+        .replace(/([.!?]\s+)(\d+\.\s+)/g, '$1\n$2')
+        .replace(/(\]\([^\)]+\)\s*)(\d+\.\s+)/g, '$1\n$2');
+
+    let escaped = cleanText
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    if (isError) {
+        return `<div class="chat-error-msg"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>${escaped.replace(/^⚠️\s*/, '')}</span></div>`;
+    }
+
+    // Fenced code blocks
+    escaped = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+        return `<pre class="chat-code-block"><code>${code.trim()}</code></pre>`;
+    });
+
+    // Inline code
+    escaped = escaped.replace(/`([^`]+)`/g, '<code class="chat-inline-code">$1</code>');
+
+    // Horizontal rules (--- or ***)
+    escaped = escaped.replace(/^(\s*[-*_]{3,}\s*)$/gm, '<hr class="chat-hr">');
+
+    // Headers
+    escaped = escaped.replace(/^#### (.*?)$/gm, '<h6 class="chat-h6">$1</h6>');
+    escaped = escaped.replace(/^### (.*?)$/gm, '<h5 class="chat-h5">$1</h5>');
+    escaped = escaped.replace(/^## (.*?)$/gm, '<h4 class="chat-h4">$1</h4>');
+    escaped = escaped.replace(/^# (.*?)$/gm, '<h3 class="chat-h3">$1</h3>');
+
+    // Bold + Italic
+    escaped = escaped.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+    // Bold
+    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    escaped = escaped.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+    // Markdown Links: [title](url)
+    escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="chat-link">$1 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-left:2px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>');
+
+    // Split paragraphs and format lists
+    const paragraphs = escaped.split(/\n\s*\n/);
+    const formatted = paragraphs.map(p => {
+        p = p.trim();
+        if (!p) return '';
+        if (p.startsWith('<pre') || p.startsWith('<hr') || p.startsWith('<h')) {
+            return p;
+        }
+        const lines = p.split('\n');
+        let inList = false;
+        let listHtml = '';
+        const outLines = [];
+        for (const line of lines) {
+            const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
+            const numMatch = line.match(/^\s*(\d+)\.\s+(.*)$/);
+            if (bulletMatch || numMatch) {
+                const content = bulletMatch ? bulletMatch[1] : numMatch[2];
+                if (!inList) {
+                    inList = true;
+                    listHtml = `<ul class="chat-ul"><li class="chat-list-item">${content}</li>`;
+                } else {
+                    listHtml += `<li class="chat-list-item">${content}</li>`;
+                }
+            } else {
+                if (inList) {
+                    listHtml += '</ul>';
+                    outLines.push(listHtml);
+                    inList = false;
+                }
+                outLines.push(line);
+            }
+        }
+        if (inList) {
+            listHtml += '</ul>';
+            outLines.push(listHtml);
+        }
+        return `<div class="chat-p">${outLines.join('<br>')}</div>`;
+    }).filter(Boolean).join('');
+
+    return formatted || `<div class="chat-p">${escaped}</div>`;
+}
+
 function appendChatMessage(sender, text, customId = null, routeTag = null) {
     const container = document.getElementById('chat-messages');
     if (!container) return;
 
     const msgDiv = document.createElement('div');
-    msgDiv.className = `message ${sender === 'user' ? 'user-msg' : 'aiva-msg'} glass-card`;
+    msgDiv.className = `message ${sender === 'user' ? 'user-msg' : 'aiva-msg'}`;
     if (customId) msgDiv.id = customId;
 
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-    const avatarText = sender === 'user' ? 'U' : 'AI';
-    const senderName = sender === 'user' ? 'You' : 'AIVA Intelligence';
+    const userInitial = document.getElementById('user-avatar-initials')?.textContent?.trim() || 'C';
+    const avatarText = sender === 'user' ? userInitial : 'AI';
+    const senderName = sender === 'user' ? 'You' : 'AIVA';
 
     let tagHtml = '';
     if (routeTag) {
-        tagHtml = `<span class="tag-pill" style="font-size:0.65rem; margin-left:8px;">${routeTag}</span>`;
+        tagHtml = `<span class="tag-pill">${routeTag}</span>`;
     }
+
+    const formattedContent = sender === 'user'
+        ? `<div class="msg-text">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
+        : `<div class="msg-text">${renderMarkdown(text)}</div>`;
 
     msgDiv.innerHTML = `
         <div class="msg-avatar">${avatarText}</div>
@@ -599,7 +702,7 @@ function appendChatMessage(sender, text, customId = null, routeTag = null) {
                 <span class="msg-sender">${senderName} ${tagHtml}</span>
                 <span class="msg-time">${timeStr}</span>
             </div>
-            <div class="msg-text">${text}</div>
+            ${formattedContent}
         </div>
     `;
 

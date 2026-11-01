@@ -121,17 +121,6 @@ class AIVAKernel:
         self.device_channel = DeviceChannel(self.db, self.device_manager)
         self.active_user_id = None
 
-    def set_active_user(self, user_id: Optional[str]):
-        """Binds the active user context across memory and task services."""
-        self.active_user_id = user_id
-        if hasattr(self, "user_memory_service") and self.user_memory_service:
-            self.user_memory_service.active_user_id = user_id
-        if hasattr(self, "conversation_memory_service") and self.conversation_memory_service:
-            self.conversation_memory_service.active_user_id = user_id
-        if hasattr(self, "task_pattern_service") and self.task_pattern_service:
-            self.task_pattern_service.active_user_id = user_id
-
-
         # =====================================
         # CORE SERVICES
         # =====================================
@@ -533,6 +522,15 @@ class AIVAKernel:
 
         )
 
+    def set_active_user(self, user_id: Optional[str]):
+        """Binds the active user context across memory and task services."""
+        self.active_user_id = user_id
+        if hasattr(self, "user_memory_service") and self.user_memory_service:
+            self.user_memory_service.active_user_id = user_id
+        if hasattr(self, "conversation_memory_service") and self.conversation_memory_service:
+            self.conversation_memory_service.active_user_id = user_id
+        if hasattr(self, "task_pattern_service") and self.task_pattern_service:
+            self.task_pattern_service.active_user_id = user_id
 
     async def initialize_runtime(self):
         print(
