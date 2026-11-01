@@ -4,6 +4,7 @@
 // =====================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
     initClock();
     initNavigation();
     initChat();
@@ -13,6 +14,58 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAuthStatus();
     pollSystemStatus();
 });
+
+// ---------------------------------------------------------------------
+// 0. Theme Manager (Dark / Light / System)
+// ---------------------------------------------------------------------
+function initTheme() {
+    const savedTheme = localStorage.getItem('aiva_theme') || 'dark';
+    applyTheme(savedTheme);
+
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) {
+        btn.addEventListener('click', () => {
+            const current = localStorage.getItem('aiva_theme') || 'dark';
+            let next = 'dark';
+            if (current === 'dark') next = 'light';
+            else if (current === 'light') next = 'system';
+            else next = 'dark';
+
+            localStorage.setItem('aiva_theme', next);
+            applyTheme(next);
+            showHudToast(`Theme set to ${next.toUpperCase()}`);
+        });
+    }
+}
+
+function applyTheme(theme) {
+    if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+    } else if (theme === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+    }
+}
+
+function showHudToast(message, type = 'info') {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        setTimeout(() => toast.remove(), 250);
+    }, 2500);
+}
 
 // ---------------------------------------------------------------------
 // 1. Live HUD Clock

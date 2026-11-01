@@ -225,3 +225,4 @@ app.whenReady().then(async () => {
   console.log('ALL SCREENSHOTS CAPTURED SUCCESSFULLY.');
   app.quit();
 });
+

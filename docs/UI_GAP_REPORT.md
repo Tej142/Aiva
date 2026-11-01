@@ -136,3 +136,4 @@
    - Run automated isolation tests.
    - Document screenshots of all screens in dark and light modes.
    - Build updated installer without leaked secrets.
+
