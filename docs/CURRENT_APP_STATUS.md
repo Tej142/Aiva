@@ -3,13 +3,19 @@
 **Report Date:** November 1, 2026  
 **Environment:** Production / Cloud + Local Companion  
 **Cloud Instance:** Oracle Cloud VM (`140.245.254.83:5000`)  
-**Repository Branch:** `origin/main` (commit `c3dfb7f`)  
+**Repository Branch:** `origin/main`  
+**Latest Commit:** `465da4c` (Overhaul: UI/UX, per-user data isolation, unified design system)
 
 ---
 
 ## 1. Executive Summary
 
-AIVA has been successfully transitioned from a standalone local desktop agent into a multi-device, cloud-hosted architecture. The cloud backend is fully deployed, active, and healthy on Oracle Cloud Infrastructure, featuring authenticated outbound WebSocket routing for hardware commands. The Windows Companion App ("AIVA Device Agent") is built with full security allowlists, Windows DPAPI credential encryption, and an installer ready for distribution.
+AIVA is fully transitioned into an enterprise-grade, multi-tenant personal AI ecosystem. It features:
+1. **Cloud Backend**: Deployed and active on Oracle Cloud Infrastructure under systemd supervisor (`aiva.service`), handling authenticated REST APIs, multi-tenant SQLite persistence, Brevo email OTP, and an outbound WebSocket command channel.
+2. **Per-User Data Isolation**: Multi-tenant architecture with strict token-derived `user_id` scoping across all memory engines, conversation histories, learned task patterns, and settings. Existing user data was migrated to `charanpc1420091@gmail.com`; new users receive a clean-slate onboarding.
+3. **Unified Design System**: Zero-dependency `tokens.css` with a refined dark-first aesthetic (`#0B0D12`), layered elevations, calm violet accent (`#6366F1`), light theme support, and locally bundled Inter `.woff2` typography (zero CDN dependencies).
+4. **Windows Companion App ("AIVA Device Agent")**: Frameless Electron 33 application with custom draggable titlebar, 6-box auto-advancing OTP, hardware permission controls, pause tray toggle, local action allowlist, and packaged NSIS installer (82.2 MB).
+5. **Quality & Verification**: 15/15 automated unit and isolation tests passing (`Ran 15 tests in 6.2s: OK`), 18 high-resolution UI screenshots captured across dark/light themes.
 
 ---
 
@@ -21,10 +27,10 @@ AIVA has been successfully transitioned from a standalone local desktop agent in
 | **Server Port** | `5000` (HTTP & WSS) | Live service listener |
 | **Operating System** | Oracle Linux Server 9.4 (UEK Kernel 5.15.0) | `uname -r` |
 | **Process Supervisor** | Systemd (`aiva.service`) | `systemctl is-active aiva` |
-| **Service Status** | **Active (Running)** (PID 55108) | `systemctl status aiva` |
-| **Process Memory** | ~125.8 MB | Resident set size |
-| **Available Disk** | 18 GB free on root filesystem | `df -h /` |
-| **Firewall (UFW/Firewalld)** | Port 5000 TCP `ACCEPT` enabled | `firewall-cmd --list-ports` |
+| **Service Status** | **Active (Running)** (PID 56865) | `systemctl status aiva` |
+| **Process Memory** | ~43.0 MB (resident) | `systemctl status aiva` |
+| **Installer Hosting** | `/download/windows-agent` (82.2 MB) | HTTP 200 attachment download |
+| **Firewall (UFW/Firewalld)** | Port 5000 TCP `ACCEPT` enabled | `iptables` / Oracle Cloud Security List |
 
 ### Live Healthcheck Response
 ```json
@@ -48,90 +54,76 @@ HTTP/1.1 200 OK
 - **Security:**
   - 6-digit cryptographically secure OTP with a 10-minute expiry window.
   - Rate limiting enforced (maximum 5 requests per 10-minute window per IP/email).
-  - OTPs stored as SHA-256 hashes in SQLite; raw values never saved or returned in responses.
-  - JWT Access Token (15-minute expiration) with rotating cryptographically random Refresh Tokens.
-- **Verification:** Live end-to-end OTP dispatch confirmed successfully to user email on production host.
+  - Max 5 failed OTP attempts before invalidation.
+  - Constant-time secret comparison (`hmac.compare_digest`).
+  - Passwords avoided in favor of passwordless email OTP; HMAC-SHA256 JWT access tokens (15m expiry) and cryptographically random refresh tokens (30d expiry).
+  - Registration stores user full name and tracks `onboarded` state.
 
-### B. SQLite Database (`services/database_service.py`)
-- **Status:** **Operational**
-- **Storage Path:** `storage/aiva.db` (Write-Ahead Logging / WAL enabled)
-- **Active Tables:**
-  - `users`: Core account identity and registration timestamps.
-  - `otps`: Email verification codes with attempt tracking and expiry.
-  - `refresh_tokens`: Revocable token rotation store.
-  - `devices`: Multi-device pairing registry with SHA-256 token hashes and status tracking.
-  - `command_audit_logs`: Audit trail of every dispatched command, target device, execution latency, and return status.
+### B. Multi-Tenant Data Isolation (`services/database_service.py`, `kernel.py`)
+- **Status:** **Operational & 100% Isolated**
+- **Database Schema:** SQLite at `storage/aiva.db` with WAL mode and `busy_timeout = 5000`.
+- **User Scoping:**
+  - `user_memories (id, user_id, fact_key, fact_value, category, updated_at)`
+  - `conversation_history (id, user_id, role, content, created_at)`
+  - `user_task_patterns (id, user_id, trigger_pattern, goal_template, ...)`
+  - `user_settings (user_id, setting_key, setting_value, updated_at)`
+- **Security Guarantee:**
+  - All endpoints derive `user_id` strictly from verified JWT tokens via `@require_auth`.
+  - Client-supplied `user_id` parameters are ignored.
+  - Kernel sets active user context (`kernel.set_active_user(user_id)`) per request.
+  - Automatic migration script preserved all pre-existing data under Charan's account (`charanpc1420091@gmail.com`).
+  - Verified by dedicated multi-user isolation test suite (`tests/test_data_isolation.py`).
 
-### C. Device Registry & WebSocket Channel (`services/device_manager.py` & `services/device_channel.py`)
+### C. Device Registry & Real-Time Command Channel (`services/device_channel.py`)
 - **Status:** **Operational**
-- **Protocol:** Outbound WebSocket (`/ws/device`) with ping-pong heartbeats every 30s.
-- **Routing Intelligence:**
-  - Dynamic resolution targeting specific device names or defaulting to the user's most recently active online device.
-  - Explicit diagnostic error feedback when no device is online (avoids silent failures in LLM tool execution).
-- **Audit Logging:** Every command ID, payload, status code, and latency is recorded in `command_audit_logs`.
+- **Protocol:** Outbound WebSocket (`ws://` / `wss://` at `/ws/device`), device sends authenticated handshake with `device_token`.
+- **Heartbeat:** Ping/pong every 30s with 10s timeout.
+- **Routing:** AIVA actions route to target device by name or default to the most recently active online device. Clear, human-friendly error messages if no device is online.
 
-### D. Kernel Desktop Capability Dispatcher (`core/runtime/kernel.py`)
-- **Status:** **Operational**
-- **Capabilities Re-routed through Device Channel:**
-  - `open_url` / YouTube / browser navigation
-  - `launch_app` (system allowlist mapping)
-  - `volume_control` (set percentage / mute)
-  - `media_control` (play / pause / next / prev)
-  - `take_screenshot` (base64 image payload transmission)
-  - `type_text` (keystroke simulation)
-  - `lock_screen` (workstation lock)
-  - `list_running_apps` & `close_app`
-  - `file_explorer` / `open_folder` (scoped paths)
+### D. Windows Companion App ("AIVA Device Agent")
+- **Status:** **Packaged & Verified**
+- **Technology:** Electron 33, Node.js 20, native Windows DPAPI credential encryption.
+- **UI Architecture:**
+  - Frameless custom window with draggable header, user initials avatar, device indicator, and native window controls.
+  - 6-box OTP input with auto-advance, clipboard paste, error shake animation, and 60s cooldown timer.
+  - Slim navigation sidebar: Assistant, Devices, Activity, Settings.
+  - System tray icon with "Pause control" toggle, show/hide, and quit handlers.
+  - Packaged with NSIS installer (`windows-agent/dist/AIVA Device Agent Setup 1.0.0.exe`).
 
-### E. Web UI & Direct Binary Downloads (`ui/` & `aiva_server.py`)
-- **Status:** **Operational**
-- **Web Interface:** Accessible at `http://140.245.254.83:5000/`
-- **Application Download Button:** Present on top-right navigation bar of the Web HUD.
-- **Direct Installer Route:** `http://140.245.254.83:5000/download/windows-agent` serves the 81.7 MB executable directly with an automated fallback redirect to GitHub Releases.
+### E. Unified Design System (`tokens.css`)
+- **Status:** **Deployed on Web HUD & Desktop App**
+- **Theme:** Dark `#0B0D12` base with elevation layers, violet `#6366F1` primary accent, and light mode support (`[data-theme="light"]`).
+- **Typography:** Bundled Inter woff2 (Regular, Medium, SemiBold, Bold) in `ui/fonts/` and `windows-agent/src/renderer/fonts/` (zero external CDN dependency).
+- **Accessibility:** High-contrast focus rings, keyboard navigation, smooth motion with `prefers-reduced-motion` fallbacks.
 
 ---
 
-## 4. Windows Companion App (`windows-agent/`)
+## 4. Verification Suite & UI Screenshots
 
-| Module | Purpose | Status |
-|---|---|---|
-| **`src/main/index.js`** | Electron lifecycle, system tray integration, background minimize | Verified |
-| **`src/main/secure-store.js`** | Token storage encrypted with Windows DPAPI via Electron `safeStorage` | Verified |
-| **`src/main/permissions.js`** | Capability flags (Apps, Input, Media, Files, Screenshot, Power) | Verified |
-| **`src/main/executor.js`** | Strict allowlist executor; native Windows confirmation modal for destructive tasks | Verified |
-| **`src/main/ws-client.js`** | Outbound WebSocket connection with auto-reconnect backoff & acks | Verified |
-| **`src/renderer/`** | Multi-screen UI: Login (Email + OTP), Embedded Web HUD, Settings & Live Log | Verified |
-| **Installer (`dist/`)** | NSIS Setup Executable: `AIVA Device Agent Setup 1.0.0.exe` (81.7 MB) | Built & Deployed |
+### Automated Test Suite (`python -m unittest discover tests`)
+- `tests/test_data_isolation.py` (5 tests): Multi-user data isolation across memory, history, devices, and settings.
+- `tests/test_device_e2e.py` (2 tests): End-to-end device registration, heartbeat, and tool dispatch.
+- `tests/test_device_registry.py` (3 tests): Device creation, token generation, revocation, and rename.
+- `tests/test_auth_service.py` (5 tests): OTP generation, validation, rate limiting, and token refresh.
+- **Result:** **15 / 15 Tests Passed (100% pass rate).**
 
----
-
-## 5. Verification & Test Matrix
-
-| Test Suite / Check | Scope | Result |
-|---|---|---|
-| **`tests/test_auth_service.py`** | OTP generation, rate limiting, expiry, token rotation | **100% Passed (4/4)** |
-| **`tests/test_device_registry.py`** | Device pairing, token generation, rename, revocation | **100% Passed (3/3)** |
-| **`tests/test_device_channel.py`** | WebSocket routing, offline detection, cross-user isolation | **100% Passed (3/3)** |
-| **Live Remote Endpoint Test** | `http://140.245.254.83:5000/health` | **200 OK** |
-| **Live Brevo Email Test** | Production dispatch of OTP to `charanpc1420091@gmail.com` | **200 OK (Delivered)** |
-| **Live Installer Download** | `http://140.245.254.83:5000/download/windows-agent` | **200 OK (81.7 MB)** |
-| **Repository Secret Audit** | Scan `.env`, git history, and build artifacts for exposed secrets | **Clean (Zero Secrets Leaked)** |
+### Screenshot Catalog (`docs/screenshots/`)
+| View | Dark Theme | Light Theme | Description |
+|---|---|---|---|
+| **Login** | `login_dark.png` | `login_light.png` | Email input with floating labels and branding panel |
+| **Register** | `register_dark.png` | `register_light.png` | Name, email, and terms & conditions checkbox |
+| **OTP Verification** | `otp_dark.png` | `otp_light.png` | 6-box digit input, masked email, and countdown |
+| **Loading State** | `loading_dark.png` | `loading_light.png` | Branded spinner and personalized greeting |
+| **Error Banner** | `error_dark.png` | `error_light.png` | Friendly error banner with input shake animation |
+| **Assistant Home** | `home_dark.png` | `home_light.png` | Integrated Web HUD canvas with status pills |
+| **Devices View** | `devices_dark.png` | `devices_light.png` | Active device cards, status badges, rename/revoke |
+| **Activity Log** | `activity_dark.png` | `activity_light.png` | Execution audit log with status badges and latencies |
+| **Settings & Permissions** | `settings_dark.png` | `settings_light.png` | Profile info, server URL, and capability toggles |
 
 ---
 
-## 6. How to Connect a New Windows PC
+## 5. Deployment & Release Information
 
-1. **Download the Agent:**
-   - Click the **"Download Application"** button in the web HUD at `http://140.245.254.83:5000/` (or directly browse to `http://140.245.254.83:5000/download/windows-agent`).
-2. **Install & Run:**
-   - Run `AIVA-Device-Agent-Setup-1.0.0.exe`.
-   - The app launches to the Login screen.
-3. **Authenticate:**
-   - Enter your email (`charanpc1420091@gmail.com`).
-   - Check your inbox for the 6-digit OTP code sent via Brevo.
-   - Enter the OTP to sign in.
-4. **Operation:**
-   - The embedded AIVA Web HUD appears automatically with your session active.
-   - The app minimizes to the system tray on close and maintains its real-time command link.
-   - Any voice or text command directed to AIVA (e.g., *"open YouTube"*, *"open Notepad"*, *"set volume to 40"*) will immediately execute on your local Windows PC.
-
+- **Web HUD URL:** `http://140.245.254.83:5000/`
+- **Windows App Download:** `http://140.245.254.83:5000/download/windows-agent`
+- **GitHub Repository:** `https://github.com/Tej142/Aiva.git`
