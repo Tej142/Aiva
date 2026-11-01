@@ -3,14 +3,17 @@ import asyncio
 import platform
 import subprocess
 import pyperclip
-import pyautogui
+try:
+    import pyautogui
+    # Disable PyAutoGUI fail-safe pause for high-speed execution, but keep safety
+    pyautogui.PAUSE = 0.05
+    pyautogui.FAILSAFE = True
+except Exception:
+    pyautogui = None
+
 from core.shared.logger import get_logger
 
 logger = get_logger("UIController")
-
-# Disable PyAutoGUI fail-safe pause for high-speed execution, but keep safety
-pyautogui.PAUSE = 0.05
-pyautogui.FAILSAFE = True
 
 
 def focus_window(title_pattern: str) -> dict:

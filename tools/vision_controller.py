@@ -1,7 +1,10 @@
 import time
 import asyncio
 from typing import Optional, Dict, Any
-import pyautogui
+try:
+    import pyautogui
+except Exception:
+    pyautogui = None
 from services.vision_service import VisionService
 from core.shared.logger import get_logger
 
