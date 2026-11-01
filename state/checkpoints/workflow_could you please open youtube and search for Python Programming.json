@@ -1,0 +1,17 @@
+{
+  "workflow_id": "workflow_could you please open youtube and search for Python Programming",
+  "current_step": "search_python_programming_youtube",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_youtube",
+      "search_python_programming_youtube"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1788672393.4898746
+}

@@ -1,0 +1,20 @@
+{
+  "workflow_id": "workflow_Research about SV government polytechnic,Tirupati",
+  "current_step": "search_facilities",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "search_sv_polytechnic_tirupati",
+      "open_sv_polytechnic_site",
+      "search_courses_offered",
+      "search_admissions_info",
+      "search_facilities"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782568634.0420208
+}

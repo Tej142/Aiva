@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_the chrome",
+  "current_step": "launch_chrome_browser",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_chrome_browser"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789269903.9912162
+}

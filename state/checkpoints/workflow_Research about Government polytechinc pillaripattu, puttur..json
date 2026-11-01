@@ -1,0 +1,19 @@
+{
+  "workflow_id": "workflow_Research about Government polytechinc pillaripattu, puttur.",
+  "current_step": "search_contacts",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "search_polytechnic",
+      "open_polytechnic_site",
+      "search_affiliation",
+      "search_contacts"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782568885.8908591
+}

@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_search about svgp tirupati in chrome",
+  "current_step": "search_svg_tirupati",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "search_svg_tirupati"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783250579.7166717
+}

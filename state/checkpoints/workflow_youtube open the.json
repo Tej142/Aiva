@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_youtube open the",
+  "current_step": "launch_youtube",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_youtube"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790266504.6791158
+}

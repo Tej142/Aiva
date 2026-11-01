@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_ok remember that my name is CHARAN TEJA, The creator AIVA(Owner, Creator)",
+  "current_step": "confirm_identity",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "confirm_identity"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783250829.676508
+}

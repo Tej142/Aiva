@@ -1,0 +1,57 @@
+# ============================================================
+# AIVA — Python Dependency Manifest
+# Python 3.10+ required
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# ----------------------------------
+# Web Server (HUD + Alexa Webhook)
+# ----------------------------------
+flask>=3.1.2
+
+# ----------------------------------
+# LLM Providers
+# ----------------------------------
+groq>=1.5.0                 # Primary conversation + intent classifier fallback (7-key pool)
+mistralai>=1.8.2            # Workflow planner + research summarizer (5-key pool)
+google-genai>=1.60.0        # Intent classifier + Vision AI (5-key pool)
+
+# ----------------------------------
+# Web Search
+# ----------------------------------
+tavily-python>=0.7.26       # Deep web research engine
+
+# ----------------------------------
+# Text-to-Speech & Speech-to-Text
+# ----------------------------------
+edge-tts>=7.2.7             # Microsoft Neural TTS (Prabhat English / Mohan Telugu)
+sounddevice>=0.5.3          # Audio playback for Edge TTS output
+soundfile>=0.13.1           # Audio decoding (MP3/WAV from Edge TTS stream)
+numpy>=1.26.4               # Audio buffer manipulation
+pyttsx3>=2.99               # Offline SAPI5 fallback TTS (Windows)
+SpeechRecognition>=3.14.5   # Google STT for mic input and wake word
+
+# ----------------------------------
+# OS & Desktop Automation
+# ----------------------------------
+pyautogui>=0.9.54           # Keyboard/mouse automation
+pywin32>=311                # Win32 API (window focus, hotkeys, volume)
+pyperclip>=1.11.0           # Clipboard-based instant text paste
+PyGetWindow>=0.0.9          # Window title enumeration and activation
+psutil>=7.2.1               # Process inspection and system stats
+pillow>=12.3.0              # Screenshot capture + image manipulation
+
+# ----------------------------------
+# Browser Automation
+# ----------------------------------
+selenium>=4.43.0            # Chrome WebDriver control (stealth mode)
+
+# ----------------------------------
+# Document Generation
+# ----------------------------------
+python-docx>=1.2.0          # Word (.docx) file creation
+
+# ----------------------------------
+# Networking
+# ----------------------------------
+requests>=2.32.5            # HTTP calls (ElevenLabs TTS, Sarvam, misc)

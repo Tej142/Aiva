@@ -1,0 +1,19 @@
+{
+  "workflow_id": "workflow_could you please open the chrome and search mbg army in youtube, and aslo in another tab search for DSA keypoints",
+  "current_step": "search_dsa_keypoints_google",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_chrome_app",
+      "wait_for_chrome",
+      "search_mbg_army_youtube",
+      "search_dsa_keypoints_google"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790479436.0164442
+}

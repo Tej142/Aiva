@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_open settings",
+  "current_step": "open_settings",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_settings"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1788673203.382383
+}

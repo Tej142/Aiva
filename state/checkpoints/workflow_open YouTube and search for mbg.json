@@ -1,0 +1,17 @@
+{
+  "workflow_id": "workflow_open YouTube and search for mbg",
+  "current_step": "open_youtube_search",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_chrome",
+      "open_youtube_search"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790265992.6475744
+}

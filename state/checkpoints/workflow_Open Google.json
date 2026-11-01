@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_Open Google",
+  "current_step": "open_google",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_google"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782568156.163831
+}

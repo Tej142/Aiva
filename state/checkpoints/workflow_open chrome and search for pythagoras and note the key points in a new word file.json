@@ -1,0 +1,17 @@
+{
+  "workflow_id": "workflow_open chrome and search for Pythagoras and note the key points in a new word file",
+  "current_step": "open_google_search",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_chrome",
+      "open_google_search"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789278428.5405495
+}

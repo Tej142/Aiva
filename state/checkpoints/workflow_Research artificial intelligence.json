@@ -1,0 +1,20 @@
+{
+  "workflow_id": "workflow_Research artificial intelligence",
+  "current_step": "current_state_art",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "define_ai",
+      "ai_history",
+      "ai_applications",
+      "ai_types",
+      "current_state_art"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782568156.163831
+}

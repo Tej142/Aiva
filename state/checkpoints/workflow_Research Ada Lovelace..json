@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_Research Ada Lovelace.",
+  "current_step": "research_ada_lovelace",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_ada_lovelace"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783234760.1475348
+}

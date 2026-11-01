@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_Research about SV government polytechnic,Tirupati in wikkipidea.",
+  "current_step": "open_wikipedia_sv_polytechnic",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_wikipedia_sv_polytechnic"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782568789.7860298
+}

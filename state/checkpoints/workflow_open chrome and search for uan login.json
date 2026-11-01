@@ -1,0 +1,17 @@
+{
+  "workflow_id": "workflow_open chrome and search for uan login",
+  "current_step": "search_uan_login",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_chrome",
+      "search_uan_login"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1784124489.158064
+}

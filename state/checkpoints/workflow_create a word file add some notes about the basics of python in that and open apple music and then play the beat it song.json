@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_create a word file add some notes about the basics of python in that and open apple music and then play the beat it song",
+  "current_step": "media_control_task",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "media_control_task"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1788680911.1019213
+}

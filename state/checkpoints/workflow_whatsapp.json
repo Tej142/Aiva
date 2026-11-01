@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_whatsapp",
+  "current_step": "open_whatsapp_web",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_whatsapp_web"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789283845.3448064
+}

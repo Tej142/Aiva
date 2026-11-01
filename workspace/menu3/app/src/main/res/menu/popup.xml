@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:title="Java"
+        android:id="@+id/java"/>
+    <item
+        android:id="@+id/kotlin"
+        android:title="Kotlin"/>
+    <item
+        android:title="HTML"
+        android:id="@+id/html"/>
+</menu>

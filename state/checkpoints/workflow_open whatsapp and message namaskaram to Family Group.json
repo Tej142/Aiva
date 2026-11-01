@@ -1,0 +1,25 @@
+{
+  "workflow_id": "workflow_open whatsapp and message namaskaram to Family Group",
+  "current_step": "send_message",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_whatsapp_web",
+      "wait_for_whatsapp_load",
+      "focus_whatsapp_window",
+      "focus_whatsapp_search",
+      "type_group_name",
+      "wait_for_search_results",
+      "select_group",
+      "wait_chat_ready",
+      "type_message_content",
+      "send_message"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789280216.0792458
+}

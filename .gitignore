@@ -1,0 +1,31 @@
+# ============================================================
+# Security & Secrets (NEVER push API keys or private keys)
+# ============================================================
+config/secrets.json
+*.key
+*.pem
+
+# ============================================================
+# Python Bytecode & Environments
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# ============================================================
+# Temporary, Debug & Scratch Artifacts
+# ============================================================
+chrome_debug/
+scratch/
+*.log
+*.tar.gz
+*.zip
+.vscode/
+.idea/
+storage/last_screenshot.png

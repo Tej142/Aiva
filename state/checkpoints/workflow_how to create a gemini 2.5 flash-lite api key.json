@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_how to create a gemini 2.5 flash-lite api key",
+  "current_step": "research_gemini_api_key",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_gemini_api_key"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783253612.0871615
+}

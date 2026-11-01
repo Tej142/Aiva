@@ -1,0 +1,2482 @@
+{
+    "pattern_create_a_word_doc_about_query": {
+        "id": "pattern_create_a_word_doc_about_query",
+        "template_goal": "create a word doc about {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "create_doc",
+                "action": "create_document",
+                "parameters": {
+                    "file_name": "notes.docx",
+                    "topic": "AI Basics",
+                    "content": "Intro to AI"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "launch_word",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "word"
+                },
+                "dependencies": [
+                    "create_doc"
+                ]
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789276934.0152085,
+        "last_executed": 1789277321.9198117,
+        "examples": [
+            "create a word doc about ai basics and open word",
+            "create a word doc about python programming and open it"
+        ]
+    },
+    "pattern_hi_open_chrome": {
+        "id": "pattern_hi_open_chrome",
+        "template_goal": "hi open chrome",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1789277008.7793927,
+        "last_executed": 1789277321.8290412,
+        "examples": [
+            "hi open chrome"
+        ]
+    },
+    "pattern_open_chrome": {
+        "id": "pattern_open_chrome",
+        "template_goal": "open chrome",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 4,
+        "created_at": 1789277063.6752117,
+        "last_executed": 1789277321.8404298,
+        "examples": [
+            "open chrome"
+        ]
+    },
+    "pattern_open_chrome_please": {
+        "id": "pattern_open_chrome_please",
+        "template_goal": "open chrome please",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1789277154.4856956,
+        "last_executed": 1789277321.8393784,
+        "examples": [
+            "open chrome please"
+        ]
+    },
+    "pattern_open_chrome_and_search_for_query": {
+        "id": "pattern_open_chrome_and_search_for_query",
+        "template_goal": "open chrome and search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "open_google_search",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.google.com/search?q={query_encoded}"
+                },
+                "dependencies": [
+                    "launch_chrome"
+                ]
+            }
+        ],
+        "frequency": 22,
+        "created_at": 1789277193.0159173,
+        "last_executed": 1789278527.4816883,
+        "examples": [
+            "open chrome and search for uan login",
+            "open chrome and search for artificial intelligence in google",
+            "open chrome and search for youtube and search for tech in that youtube",
+            "open chrome and search for pythagoras and note the key points in a new word file"
+        ]
+    },
+    "pattern_5th_semester": {
+        "id": "pattern_5th_semester",
+        "template_goal": "5th semester",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_5th_semester",
+                "action": "research",
+                "parameters": {
+                    "query": "5th semester"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.815657,
+        "last_executed": 1789277321.815657,
+        "examples": [
+            "5th semester"
+        ]
+    },
+    "pattern_ahhh_it_s_a_sunday_and_the_day_was_good_": {
+        "id": "pattern_ahhh_it_s_a_sunday_and_the_day_was_good_",
+        "template_goal": "ahhh.... it's a sunday and the day was good too",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "acknowledge_user_sentiment",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8231966,
+        "last_executed": 1789277321.8231966,
+        "examples": [
+            "ahhh.... it's a sunday and the day was good too"
+        ]
+    },
+    "pattern_chrome_open_cheyyi": {
+        "id": "pattern_chrome_open_cheyyi",
+        "template_goal": "chrome open cheyyi",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8242867,
+        "last_executed": 1789277321.8242867,
+        "examples": [
+            "chrome open cheyyi"
+        ]
+    },
+    "pattern_chrome": {
+        "id": "pattern_chrome",
+        "template_goal": "chrome",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome_app",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8254333,
+        "last_executed": 1789277321.8254333,
+        "examples": [
+            "chrome"
+        ]
+    },
+    "pattern_could_you_please_open_youtube_and_search": {
+        "id": "pattern_could_you_please_open_youtube_and_search",
+        "template_goal": "could you please open youtube and search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "search_python_programming_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": [
+                    "open_youtube"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8259864,
+        "last_executed": 1789277321.8259864,
+        "examples": [
+            "could you please open youtube and search for python programming"
+        ]
+    },
+    "pattern_create_a_word_file_add_some_notes_about_": {
+        "id": "pattern_create_a_word_file_add_some_notes_about_",
+        "template_goal": "create a word file add some notes about {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "media_control_task",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8272274,
+        "last_executed": 1789277321.8272274,
+        "examples": []
+    },
+    "pattern_create_an_temporary_account": {
+        "id": "pattern_create_an_temporary_account",
+        "template_goal": "create an temporary account",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_temp_account_services",
+                "action": "research",
+                "parameters": {
+                    "query": "create an temporary account"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.828007,
+        "last_executed": 1789277321.828007,
+        "examples": [
+            "create an temporary account"
+        ]
+    },
+    "pattern_hi_there": {
+        "id": "pattern_hi_there",
+        "template_goal": "hi there!",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "greet_user",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.830156,
+        "last_executed": 1789277321.830156,
+        "examples": [
+            "hi there!"
+        ]
+    },
+    "pattern_how_to_create_a_gemini_2_5_flash_lite_ap": {
+        "id": "pattern_how_to_create_a_gemini_2_5_flash_lite_ap",
+        "template_goal": "how to create a gemini 2.5 flash-lite api key",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_gemini_api_key",
+                "action": "research",
+                "parameters": {
+                    "query": "how to create a gemini 2.5 flash-lite api key"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8313348,
+        "last_executed": 1789277321.8313348,
+        "examples": [
+            "how to create a gemini 2.5 flash-lite api key"
+        ]
+    },
+    "pattern_notepad": {
+        "id": "pattern_notepad",
+        "template_goal": "notepad",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_notepad_app",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "notepad"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1789277321.8323722,
+        "last_executed": 1789283943.0242572,
+        "examples": [
+            "notepad"
+        ]
+    },
+    "pattern_ok_remember_that_my_name_is_charan_teja_": {
+        "id": "pattern_ok_remember_that_my_name_is_charan_teja_",
+        "template_goal": "ok remember that my name is charan teja, the creator aiva(owner, creator)",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "confirm_identity",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8334377,
+        "last_executed": 1789277321.8334377,
+        "examples": [
+            "ok remember that my name is charan teja, the creator aiva(owner, creator)"
+        ]
+    },
+    "pattern_ok_who_is_tesla": {
+        "id": "pattern_ok_who_is_tesla",
+        "template_goal": "ok who is tesla",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_tesla",
+                "action": "research",
+                "parameters": {
+                    "query": "ok who is tesla"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8345113,
+        "last_executed": 1789277321.8345113,
+        "examples": [
+            "ok who is tesla"
+        ]
+    },
+    "pattern_open_chrome_and_open_youtube_and_search_": {
+        "id": "pattern_open_chrome_and_open_youtube_and_search_",
+        "template_goal": "open chrome and open youtube and search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "open_chrome",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": [
+                    "open_chrome"
+                ]
+            },
+            {
+                "node_id": "search_mbg_army",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "open_youtube"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.835553,
+        "last_executed": 1789277321.835553,
+        "examples": [
+            "open chrome and open youtube and search for mbg army"
+        ]
+    },
+    "pattern_open_chrome_and_search_for_youtube": {
+        "id": "pattern_open_chrome_and_search_for_youtube",
+        "template_goal": "open chrome and search for youtube",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "open_google_search",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.google.com/search?q={query_encoded}"
+                },
+                "dependencies": [
+                    "launch_chrome"
+                ]
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789277321.8388643,
+        "last_executed": 1791550424.3928282,
+        "examples": [
+            "open chrome and search for youtube"
+        ]
+    },
+    "pattern_open_disk_partitions_please": {
+        "id": "pattern_open_disk_partitions_please",
+        "template_goal": "open disk partitions please",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_disk_partitions",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.841494,
+        "last_executed": 1789277321.841494,
+        "examples": [
+            "open disk partitions please"
+        ]
+    },
+    "pattern_open_google": {
+        "id": "pattern_open_google",
+        "template_goal": "open google",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_google",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query=Open Google"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8425639,
+        "last_executed": 1789277321.8425639,
+        "examples": [
+            "open google"
+        ]
+    },
+    "pattern_open_latest_mbg_army_channel_video_in_yo": {
+        "id": "pattern_open_latest_mbg_army_channel_video_in_yo",
+        "template_goal": "open latest mbg army channel video in youtube",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "search_mbg_army_channel",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "open_latest_video",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_mbg_army_channel"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.843688,
+        "last_executed": 1789277321.843688,
+        "examples": [
+            "open latest mbg army channel video in youtube"
+        ]
+    },
+    "pattern_open_leetcode_in_browser": {
+        "id": "pattern_open_leetcode_in_browser",
+        "template_goal": "open leetcode in browser",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_leetcode",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8445704,
+        "last_executed": 1789277321.8445704,
+        "examples": [
+            "open leetcode in browser"
+        ]
+    },
+    "pattern_open_notepad": {
+        "id": "pattern_open_notepad",
+        "template_goal": "open notepad",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_notepad",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "notepad"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789277321.8456047,
+        "last_executed": 1790266250.4092696,
+        "examples": [
+            "open notepad"
+        ]
+    },
+    "pattern_open_settings": {
+        "id": "pattern_open_settings",
+        "template_goal": "open settings",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_settings",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1789277321.8466735,
+        "last_executed": 1789277321.93825,
+        "examples": [
+            "open settings"
+        ]
+    },
+    "pattern_open_youtube_and_search_for_query_in_chr": {
+        "id": "pattern_open_youtube_and_search_for_query_in_chr",
+        "template_goal": "open youtube and search for {query} in chrome",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "search_mbg_army",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "open_youtube"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8482509,
+        "last_executed": 1789277321.8482509,
+        "examples": [
+            "open youtube and search for mbg army in chrome"
+        ]
+    },
+    "pattern_open_youtube_and_search_for_query_in_you": {
+        "id": "pattern_open_youtube_and_search_for_query_in_you",
+        "template_goal": "open youtube, and search for {query} in youtube",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "search_lg_tv_in_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": [
+                    "open_youtube"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8493068,
+        "last_executed": 1789277321.8493068,
+        "examples": [
+            "open youtube, and search for lg tv in youtube"
+        ]
+    },
+    "pattern_open_youtube": {
+        "id": "pattern_open_youtube",
+        "template_goal": "open youtube",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query=Open YouTube"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789277321.8508842,
+        "last_executed": 1790483305.752058,
+        "examples": [
+            "open youtube"
+        ]
+    },
+    "pattern_play_query_in_youtube": {
+        "id": "pattern_play_query_in_youtube",
+        "template_goal": "play {query} in youtube",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_mbg_army_videos",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "open_mbg_army_video",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_mbg_army_videos"
+                ]
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1789277321.8519459,
+        "last_executed": 1789277321.9150062,
+        "examples": [
+            "play beat it song in youtube",
+            "play any video of mbg army in youtube"
+        ]
+    },
+    "pattern_play_query": {
+        "id": "pattern_play_query",
+        "template_goal": "play {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "launch_apple_music_app",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "play_media_task",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "launch_apple_music_app"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8529522,
+        "last_executed": 1789277321.8529522,
+        "examples": [
+            "play beat it song"
+        ]
+    },
+    "pattern_research_query": {
+        "id": "pattern_research_query",
+        "template_goal": "research {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "research_ai_introduction",
+                "action": "research",
+                "parameters": {
+                    "query": "research about AI"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "research_ai_history",
+                "action": "research",
+                "parameters": {
+                    "query": "research about AI"
+                },
+                "dependencies": [
+                    "research_ai_introduction"
+                ]
+            },
+            {
+                "node_id": "research_ai_types",
+                "action": "research",
+                "parameters": {
+                    "query": "research about AI"
+                },
+                "dependencies": [
+                    "research_ai_history"
+                ]
+            },
+            {
+                "node_id": "research_ai_applications",
+                "action": "research",
+                "parameters": {
+                    "query": "research about AI"
+                },
+                "dependencies": [
+                    "research_ai_types"
+                ]
+            }
+        ],
+        "frequency": 5,
+        "created_at": 1789277321.8555658,
+        "last_executed": 1789277321.9222934,
+        "examples": [
+            "research about nikola tesla",
+            "research about ai",
+            "research artificial intelligence",
+            "research about elon musk"
+        ]
+    },
+    "pattern_research_query_in_chrome": {
+        "id": "pattern_research_query_in_chrome",
+        "template_goal": "research {query} in chrome",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "research_android_programming_chrome",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8565476,
+        "last_executed": 1789277321.8565476,
+        "examples": [
+            "research about android prgramming in chrome"
+        ]
+    },
+    "pattern_research_about_government_polytechinc_pi": {
+        "id": "pattern_research_about_government_polytechinc_pi",
+        "template_goal": "research about government polytechinc pillaripattu, puttur.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "search_polytechnic",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "open_polytechnic_site",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_polytechnic"
+                ]
+            },
+            {
+                "node_id": "search_affiliation",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "open_polytechnic_site"
+                ]
+            },
+            {
+                "node_id": "search_contacts",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_affiliation"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8606095,
+        "last_executed": 1789277321.8606095,
+        "examples": [
+            "research about government polytechinc pillaripattu, puttur."
+        ]
+    },
+    "pattern_research_about_sv_government_polytechnic": {
+        "id": "pattern_research_about_sv_government_polytechnic",
+        "template_goal": "research about sv government polytechnic,tirupati in wikkipidea.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_wikipedia_sv_polytechnic",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789277321.8639462,
+        "last_executed": 1789277321.8669462,
+        "examples": [
+            "research about sv government polytechnic,tirupati",
+            "research about sv government polytechnic,tirupati in wikkipidea.",
+            "research about sv government polytechnic,tirupati. check the other sites too if the site is not opened correctly."
+        ]
+    },
+    "pattern_research_ada_lovelace": {
+        "id": "pattern_research_ada_lovelace",
+        "template_goal": "research ada lovelace.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_ada_lovelace",
+                "action": "research",
+                "parameters": {
+                    "query": "Research Ada Lovelace."
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8689463,
+        "last_executed": 1789277321.8689463,
+        "examples": [
+            "research ada lovelace."
+        ]
+    },
+    "pattern_research_artificial_intelligence_deeply": {
+        "id": "pattern_research_artificial_intelligence_deeply",
+        "template_goal": "research artificial intelligence deeply.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "ai_overview",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "ai_history",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_overview"
+                ]
+            },
+            {
+                "node_id": "ai_types",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_history"
+                ]
+            },
+            {
+                "node_id": "ai_ethics",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_types"
+                ]
+            },
+            {
+                "node_id": "ai_applications",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_ethics"
+                ]
+            },
+            {
+                "node_id": "ai_machine_learning",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_applications"
+                ]
+            },
+            {
+                "node_id": "ai_deep_learning",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_machine_learning"
+                ]
+            },
+            {
+                "node_id": "ai_recent_advancements",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_deep_learning"
+                ]
+            },
+            {
+                "node_id": "ai_future_trends",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_recent_advancements"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8699553,
+        "last_executed": 1789277321.8699553,
+        "examples": [
+            "research artificial intelligence deeply."
+        ]
+    },
+    "pattern_research_artificial_intelligence": {
+        "id": "pattern_research_artificial_intelligence",
+        "template_goal": "research artificial intelligence.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "wikipedia_ai",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "history_of_ai",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "wikipedia_ai"
+                ]
+            },
+            {
+                "node_id": "ai_applications",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "history_of_ai"
+                ]
+            },
+            {
+                "node_id": "ai_types",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "ai_applications"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8720405,
+        "last_executed": 1789277321.8720405,
+        "examples": [
+            "research artificial intelligence."
+        ]
+    },
+    "pattern_research_pythogorous": {
+        "id": "pattern_research_pythogorous",
+        "template_goal": "research pythogorous.",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_pythagoras",
+                "action": "research",
+                "parameters": {
+                    "query": "Research pythogorous."
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8759081,
+        "last_executed": 1789277321.8759081,
+        "examples": [
+            "research pythogorous."
+        ]
+    },
+    "pattern_sare_youtube_open_cheyyi": {
+        "id": "pattern_sare_youtube_open_cheyyi",
+        "template_goal": "sare youtube open cheyyi",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query=sare youtube open cheyyi"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8783057,
+        "last_executed": 1789277321.8783057,
+        "examples": [
+            "sare youtube open cheyyi"
+        ]
+    },
+    "pattern_search_query": {
+        "id": "pattern_search_query",
+        "template_goal": "search {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_diploma_definition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "search_types_of_diplomas",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_definition"
+                ]
+            },
+            {
+                "node_id": "search_diploma_vs_degree",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_types_of_diplomas"
+                ]
+            },
+            {
+                "node_id": "search_diploma_requirements",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_vs_degree"
+                ]
+            },
+            {
+                "node_id": "search_diploma_recognition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_requirements"
+                ]
+            }
+        ],
+        "frequency": 5,
+        "created_at": 1789277321.880195,
+        "last_executed": 1790483429.7027814,
+        "examples": [
+            "search about diploma",
+            "search in google"
+        ]
+    },
+    "pattern_search_query_in_chrome": {
+        "id": "pattern_search_query_in_chrome",
+        "template_goal": "search {query} in chrome",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_svg_tirupati",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8821864,
+        "last_executed": 1789277321.8821864,
+        "examples": [
+            "search about svgp tirupati in chrome"
+        ]
+    },
+    "pattern_search_for_query_in_chrome": {
+        "id": "pattern_search_for_query_in_chrome",
+        "template_goal": "search for {query} in chrome",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_ai_in_chrome",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8840494,
+        "last_executed": 1789277321.8840494,
+        "examples": [
+            "search for ai in chrome"
+        ]
+    },
+    "pattern_search_for_query_in_youtube": {
+        "id": "pattern_search_for_query_in_youtube",
+        "template_goal": "search for {query} in youtube",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_android_programming_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 4,
+        "created_at": 1789277321.886739,
+        "last_executed": 1789277321.8932567,
+        "examples": [
+            "search for mbg army in youtube",
+            "search for lg tv reviews in youtube",
+            "search for mbg in youtube",
+            "search for android programming in youtube"
+        ]
+    },
+    "pattern_settings_open_cheyyi": {
+        "id": "pattern_settings_open_cheyyi",
+        "template_goal": "settings open cheyyi",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_settings",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8948135,
+        "last_executed": 1789277321.8948135,
+        "examples": [
+            "settings open cheyyi"
+        ]
+    },
+    "pattern_tell_me_what_is_my_name": {
+        "id": "pattern_tell_me_what_is_my_name",
+        "template_goal": "tell me what is my name",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "ask_for_name",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.8978736,
+        "last_executed": 1789277321.8978736,
+        "examples": [
+            "tell me what is my name"
+        ]
+    },
+    "pattern_the_chrome": {
+        "id": "pattern_the_chrome",
+        "template_goal": "the chrome",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome_browser",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9004476,
+        "last_executed": 1789277321.9004476,
+        "examples": [
+            "the chrome"
+        ]
+    },
+    "pattern_what_is_websockets": {
+        "id": "pattern_what_is_websockets",
+        "template_goal": "what is websockets",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "research_websockets",
+                "action": "research",
+                "parameters": {
+                    "query": "what is websockets"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9031763,
+        "last_executed": 1789277321.9031763,
+        "examples": [
+            "what is websockets"
+        ]
+    },
+    "pattern_what_s_in_your_memory": {
+        "id": "pattern_what_s_in_your_memory",
+        "template_goal": "what's in your memory",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "query_memory",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9055977,
+        "last_executed": 1789277321.9055977,
+        "examples": [
+            "what's in your memory"
+        ]
+    },
+    "pattern_youtube_and_search_for_query": {
+        "id": "pattern_youtube_and_search_for_query",
+        "template_goal": "youtube and search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_youtube_mbg_army",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9080274,
+        "last_executed": 1789277321.9080274,
+        "examples": [
+            "youtube and search for mbg army"
+        ]
+    },
+    "pattern_youtube": {
+        "id": "pattern_youtube",
+        "template_goal": "youtube",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_youtube",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 3,
+        "created_at": 1789277321.9108455,
+        "last_executed": 1789283976.6526692,
+        "examples": [
+            "youtube"
+        ]
+    },
+    "pattern_open_youtube_and_search_for_query": {
+        "id": "pattern_open_youtube_and_search_for_query",
+        "template_goal": "open youtube and search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "open_youtube_search",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": [
+                    "launch_chrome"
+                ]
+            }
+        ],
+        "frequency": 4,
+        "created_at": 1789277321.9126403,
+        "last_executed": 1790266297.7452424,
+        "examples": [
+            "open youtube and search for lofi beats",
+            "open youtube and search for mbg"
+        ]
+    },
+    "pattern_start_developer_mode_open_vscode_and_ope": {
+        "id": "pattern_start_developer_mode_open_vscode_and_ope",
+        "template_goal": "start developer mode open vscode and open chrome",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_vscode",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "vscode"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9244754,
+        "last_executed": 1789277321.9244754,
+        "examples": [
+            "start developer mode open vscode and open chrome"
+        ]
+    },
+    "pattern_set_volume_to_50_percent": {
+        "id": "pattern_set_volume_to_50_percent",
+        "template_goal": "set volume to 50 percent",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "adjust_vol",
+                "action": "adjust_volume",
+                "parameters": {
+                    "level": 50
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.926475,
+        "last_executed": 1789277321.926475,
+        "examples": [
+            "set volume to 50 percent"
+        ]
+    },
+    "pattern_mute_volume": {
+        "id": "pattern_mute_volume",
+        "template_goal": "mute volume",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "mute_sys",
+                "action": "adjust_volume",
+                "parameters": {
+                    "action": "mute"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9286435,
+        "last_executed": 1789277321.9286435,
+        "examples": [
+            "mute volume"
+        ]
+    },
+    "pattern_take_a_screenshot": {
+        "id": "pattern_take_a_screenshot",
+        "template_goal": "take a screenshot",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "capture_screen",
+                "action": "take_screenshot",
+                "parameters": {},
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.9308548,
+        "last_executed": 1789277321.9308548,
+        "examples": [
+            "take a screenshot"
+        ]
+    },
+    "pattern_open_calculator": {
+        "id": "pattern_open_calculator",
+        "template_goal": "open calculator",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_calc",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "calc"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789277321.936249,
+        "last_executed": 1789277321.936249,
+        "examples": [
+            "open calculator"
+        ]
+    },
+    "pattern_search_and_note_word": {
+        "id": "pattern_search_and_note_word",
+        "template_goal": "open chrome and search for {query} and note the key points in a new word file",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_google_query",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.google.com/search?q={query_encoded}"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "create_notes_doc",
+                "action": "create_document",
+                "parameters": {
+                    "file_name": "{query}_notes.docx",
+                    "topic": "{query} Key Points",
+                    "content": "Key research notes and summary for {query}"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 8,
+        "created_at": 1789277193.0,
+        "last_executed": 1789277899.0168495,
+        "examples": [
+            "open chrome and search for pythagoras and note the key points in a new word file"
+        ]
+    },
+    "pattern_open_chrome_and_search_for_charan___tej_": {
+        "id": "pattern_open_chrome_and_search_for_charan___tej_",
+        "template_goal": "open chrome and search for charan._.tej.__.142 instagram account",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "open_google_search",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.google.com/search?q=charan._.tej.__.142+instagram+account"
+                },
+                "dependencies": [
+                    "launch_chrome"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789278527.4851527,
+        "last_executed": 1789278527.4851527,
+        "examples": [
+            "open chrome and search for charan._.tej.__.142 instagram account"
+        ]
+    },
+    "pattern_open_instagram": {
+        "id": "pattern_open_instagram",
+        "template_goal": "open instagram",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_instagram",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.instagram.com/"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789278568.6855872,
+        "last_executed": 1789278568.6855872,
+        "examples": [
+            "open instagram"
+        ]
+    },
+    "pattern_send_message_namaskaram_to_family_group_": {
+        "id": "pattern_send_message_namaskaram_to_family_group_",
+        "template_goal": "send message namaskaram to family group in whatsapp",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_whatsapp_web",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://web.whatsapp.com/"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_whatsapp_load",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 7.0
+                },
+                "dependencies": [
+                    "open_whatsapp_web"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_window",
+                "action": "focus_window",
+                "parameters": {
+                    "title": "WhatsApp"
+                },
+                "dependencies": [
+                    "wait_for_whatsapp_load"
+                ]
+            },
+            {
+                "node_id": "reset_active_search",
+                "action": "press_key",
+                "parameters": {
+                    "key": "esc",
+                    "count": 2
+                },
+                "dependencies": [
+                    "focus_whatsapp_window"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_search",
+                "action": "hotkey",
+                "parameters": {
+                    "keys": [
+                        "ctrl",
+                        "alt",
+                        "/"
+                    ]
+                },
+                "dependencies": [
+                    "reset_active_search"
+                ]
+            },
+            {
+                "node_id": "type_group_name",
+                "action": "type_text",
+                "parameters": {
+                    "text": "Family"
+                },
+                "dependencies": [
+                    "focus_whatsapp_search"
+                ]
+            },
+            {
+                "node_id": "wait_for_search_results",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "type_group_name"
+                ]
+            },
+            {
+                "node_id": "highlight_top_result",
+                "action": "press_key",
+                "parameters": {
+                    "key": "down"
+                },
+                "dependencies": [
+                    "wait_for_search_results"
+                ]
+            },
+            {
+                "node_id": "select_group",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "highlight_top_result"
+                ]
+            },
+            {
+                "node_id": "wait_chat_ready",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "select_group"
+                ]
+            },
+            {
+                "node_id": "type_message_content",
+                "action": "type_text",
+                "parameters": {
+                    "text": "Namaskaram"
+                },
+                "dependencies": [
+                    "wait_chat_ready"
+                ]
+            },
+            {
+                "node_id": "send_message",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "type_message_content"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789280808.511844,
+        "last_executed": 1789280808.511844,
+        "examples": [
+            "send message namaskaram to family group in whatsapp"
+        ]
+    },
+    "pattern_message_hello_to_jio_in_whatsapp": {
+        "id": "pattern_message_hello_to_jio_in_whatsapp",
+        "template_goal": "message hello to jio in whatsapp",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_whatsapp_web",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://web.whatsapp.com/"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_whatsapp_load",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 7.0
+                },
+                "dependencies": [
+                    "open_whatsapp_web"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_window",
+                "action": "focus_window",
+                "parameters": {
+                    "title": "WhatsApp"
+                },
+                "dependencies": [
+                    "wait_for_whatsapp_load"
+                ]
+            },
+            {
+                "node_id": "reset_active_search",
+                "action": "press_key",
+                "parameters": {
+                    "key": "esc",
+                    "count": 2
+                },
+                "dependencies": [
+                    "focus_whatsapp_window"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_search",
+                "action": "hotkey",
+                "parameters": {
+                    "keys": [
+                        "ctrl",
+                        "alt",
+                        "/"
+                    ]
+                },
+                "dependencies": [
+                    "reset_active_search"
+                ]
+            },
+            {
+                "node_id": "type_contact_name",
+                "action": "type_text",
+                "parameters": {
+                    "text": "Jio"
+                },
+                "dependencies": [
+                    "focus_whatsapp_search"
+                ]
+            },
+            {
+                "node_id": "wait_for_search_results",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "type_contact_name"
+                ]
+            },
+            {
+                "node_id": "highlight_top_result",
+                "action": "press_key",
+                "parameters": {
+                    "key": "down"
+                },
+                "dependencies": [
+                    "wait_for_search_results"
+                ]
+            },
+            {
+                "node_id": "select_contact",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "highlight_top_result"
+                ]
+            },
+            {
+                "node_id": "wait_chat_ready",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "select_contact"
+                ]
+            },
+            {
+                "node_id": "type_message_content",
+                "action": "type_text",
+                "parameters": {
+                    "text": "Hello"
+                },
+                "dependencies": [
+                    "wait_chat_ready"
+                ]
+            },
+            {
+                "node_id": "send_message",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "type_message_content"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789280941.0759592,
+        "last_executed": 1789280941.0759592,
+        "examples": [
+            "message hello to jio in whatsapp"
+        ]
+    },
+    "pattern_send_hi_to_the_charan_tej_in_whatsapp": {
+        "id": "pattern_send_hi_to_the_charan_tej_in_whatsapp",
+        "template_goal": "send hi to the charan tej in whatsapp",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_whatsapp_web",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://web.whatsapp.com/"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_whatsapp_load",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 7.0
+                },
+                "dependencies": [
+                    "open_whatsapp_web"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_window",
+                "action": "focus_window",
+                "parameters": {
+                    "title": "WhatsApp"
+                },
+                "dependencies": [
+                    "wait_for_whatsapp_load"
+                ]
+            },
+            {
+                "node_id": "reset_active_search",
+                "action": "press_key",
+                "parameters": {
+                    "key": "esc",
+                    "count": 2
+                },
+                "dependencies": [
+                    "focus_whatsapp_window"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_search",
+                "action": "hotkey",
+                "parameters": {
+                    "keys": [
+                        "ctrl",
+                        "alt",
+                        "/"
+                    ]
+                },
+                "dependencies": [
+                    "reset_active_search"
+                ]
+            },
+            {
+                "node_id": "type_contact_name",
+                "action": "type_text",
+                "parameters": {
+                    "text": "charan tej"
+                },
+                "dependencies": [
+                    "focus_whatsapp_search"
+                ]
+            },
+            {
+                "node_id": "wait_for_search_results",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "type_contact_name"
+                ]
+            },
+            {
+                "node_id": "highlight_top_result",
+                "action": "press_key",
+                "parameters": {
+                    "key": "down"
+                },
+                "dependencies": [
+                    "wait_for_search_results"
+                ]
+            },
+            {
+                "node_id": "select_contact",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "highlight_top_result"
+                ]
+            },
+            {
+                "node_id": "wait_chat_ready",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "select_contact"
+                ]
+            },
+            {
+                "node_id": "type_message_content",
+                "action": "type_text",
+                "parameters": {
+                    "text": "hi"
+                },
+                "dependencies": [
+                    "wait_chat_ready"
+                ]
+            },
+            {
+                "node_id": "send_message",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "type_message_content"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789281230.1640348,
+        "last_executed": 1789281230.1640348,
+        "examples": [
+            "send hi to the charan tej in whatsapp"
+        ]
+    },
+    "pattern_send_hello_to_8639473796_in_whatsapp": {
+        "id": "pattern_send_hello_to_8639473796_in_whatsapp",
+        "template_goal": "send hello to 8639473796 in whatsapp",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_whatsapp_web",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://web.whatsapp.com/"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_whatsapp_load",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 7.0
+                },
+                "dependencies": [
+                    "open_whatsapp_web"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_window",
+                "action": "focus_window",
+                "parameters": {
+                    "title": "WhatsApp"
+                },
+                "dependencies": [
+                    "wait_for_whatsapp_load"
+                ]
+            },
+            {
+                "node_id": "reset_active_search",
+                "action": "press_key",
+                "parameters": {
+                    "key": "esc",
+                    "count": 2
+                },
+                "dependencies": [
+                    "focus_whatsapp_window"
+                ]
+            },
+            {
+                "node_id": "focus_whatsapp_search",
+                "action": "hotkey",
+                "parameters": {
+                    "keys": [
+                        "ctrl",
+                        "alt",
+                        "/"
+                    ]
+                },
+                "dependencies": [
+                    "reset_active_search"
+                ]
+            },
+            {
+                "node_id": "type_contact_number",
+                "action": "type_text",
+                "parameters": {
+                    "text": "8639473796"
+                },
+                "dependencies": [
+                    "focus_whatsapp_search"
+                ]
+            },
+            {
+                "node_id": "wait_for_search_results",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "type_contact_number"
+                ]
+            },
+            {
+                "node_id": "highlight_top_result",
+                "action": "press_key",
+                "parameters": {
+                    "key": "down"
+                },
+                "dependencies": [
+                    "wait_for_search_results"
+                ]
+            },
+            {
+                "node_id": "select_contact",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "highlight_top_result"
+                ]
+            },
+            {
+                "node_id": "wait_chat_ready",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 2.0
+                },
+                "dependencies": [
+                    "select_contact"
+                ]
+            },
+            {
+                "node_id": "type_message_content",
+                "action": "type_text",
+                "parameters": {
+                    "text": "hello"
+                },
+                "dependencies": [
+                    "wait_chat_ready"
+                ]
+            },
+            {
+                "node_id": "send_message",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter"
+                },
+                "dependencies": [
+                    "type_message_content"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789281290.1926367,
+        "last_executed": 1789281290.1926367,
+        "examples": [
+            "send hello to 8639473796 in whatsapp"
+        ]
+    },
+    "pattern_chrome_browser": {
+        "id": "pattern_chrome_browser",
+        "template_goal": "chrome browser",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome_browser",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789283953.6517558,
+        "last_executed": 1789283953.6517558,
+        "examples": [
+            "chrome browser"
+        ]
+    },
+    "pattern_settings": {
+        "id": "pattern_settings",
+        "template_goal": "settings",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_settings_app",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "settings"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789283966.4019876,
+        "last_executed": 1789283966.4019876,
+        "examples": [
+            "settings"
+        ]
+    },
+    "pattern_whatsapp": {
+        "id": "pattern_whatsapp",
+        "template_goal": "whatsapp",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_whatsapp_web",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://web.whatsapp.com/"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1789283992.7687347,
+        "last_executed": 1789283992.7687347,
+        "examples": [
+            "whatsapp"
+        ]
+    },
+    "pattern_what_is_on_my_screen": {
+        "id": "pattern_what_is_on_my_screen",
+        "template_goal": "what is on my screen",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "inspect_screen_content",
+                "action": "inspect_screen",
+                "parameters": {
+                    "query": "Describe what is currently visible on the screen."
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 2,
+        "created_at": 1790264551.7883508,
+        "last_executed": 1790479299.7851255,
+        "examples": [
+            "what is on my screen",
+            "what is on my screen?"
+        ]
+    },
+    "pattern_youtube_open_the": {
+        "id": "pattern_youtube_open_the",
+        "template_goal": "youtube open the",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "launch_youtube",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "youtube"
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1790266761.28384,
+        "last_executed": 1790266761.28384,
+        "examples": [
+            "youtube open the"
+        ]
+    },
+    "pattern_could_you_please_open_the_chrome_and_sea": {
+        "id": "pattern_could_you_please_open_the_chrome_and_sea",
+        "template_goal": "could you please open the chrome and search {query} in youtube, and aslo in another tab search for dsa keypoints",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "launch_chrome_app",
+                "action": "launch_app",
+                "parameters": {
+                    "app_name": "chrome"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_chrome",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 3.0
+                },
+                "dependencies": [
+                    "launch_chrome_app"
+                ]
+            },
+            {
+                "node_id": "search_mbg_army_youtube",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.youtube.com/results?search_query={query_encoded}"
+                },
+                "dependencies": [
+                    "wait_for_chrome"
+                ]
+            },
+            {
+                "node_id": "search_dsa_keypoints_google",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://www.google.com/search?q={query_encoded}"
+                },
+                "dependencies": [
+                    "wait_for_chrome"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1790479529.0875278,
+        "last_executed": 1790479529.0875278,
+        "examples": [
+            "could you please open the chrome and search mbg army in youtube, and aslo in another tab search for dsa keypoints"
+        ]
+    },
+    "pattern_search_for_query_in_chrome_and_save_it_i": {
+        "id": "pattern_search_for_query_in_chrome_and_save_it_i",
+        "template_goal": "search for {query} in chrome and save it in a notepad file",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_diploma_definition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "search_types_of_diplomas",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_definition"
+                ]
+            },
+            {
+                "node_id": "search_diploma_vs_degree",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_types_of_diplomas"
+                ]
+            },
+            {
+                "node_id": "search_diploma_requirements",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_vs_degree"
+                ]
+            },
+            {
+                "node_id": "search_diploma_recognition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_requirements"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1790483332.2067382,
+        "last_executed": 1790483332.2067382,
+        "examples": [
+            "search for pythagoras theorem in chrome and save it in a notepad file"
+        ]
+    },
+    "pattern_search_for_query": {
+        "id": "pattern_search_for_query",
+        "template_goal": "search for {query}",
+        "slots": [
+            "query"
+        ],
+        "workflow_template": [
+            {
+                "node_id": "search_diploma_definition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": []
+            },
+            {
+                "node_id": "search_types_of_diplomas",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_definition"
+                ]
+            },
+            {
+                "node_id": "search_diploma_vs_degree",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_types_of_diplomas"
+                ]
+            },
+            {
+                "node_id": "search_diploma_requirements",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_vs_degree"
+                ]
+            },
+            {
+                "node_id": "search_diploma_recognition",
+                "action": "launch_app",
+                "parameters": {},
+                "dependencies": [
+                    "search_diploma_requirements"
+                ]
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1790483429.714319,
+        "last_executed": 1790483429.714319,
+        "examples": [
+            "search for my diploma results"
+        ]
+    },
+    "pattern_https_sbtet_ap_gov_in_apsbtet_gradewiser": {
+        "id": "pattern_https_sbtet_ap_gov_in_apsbtet_gradewiser",
+        "template_goal": "https://sbtet.ap.gov.in/apsbtet/gradewiseresults.do this is the portal of my diploma to check the results now check the results of mine pin is 24155-cm-002 month is ma26 semester is 4th",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "open_result_portal",
+                "action": "open_url",
+                "parameters": {
+                    "url": "https://sbtet.ap.gov.in/APSBTET/gradeWiseResults.do"
+                },
+                "dependencies": []
+            },
+            {
+                "node_id": "wait_for_portal_load",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 6.0
+                },
+                "dependencies": [
+                    "open_result_portal"
+                ]
+            },
+            {
+                "node_id": "input_pin",
+                "action": "visual_type",
+                "parameters": {
+                    "target": "PIN input field",
+                    "text": "24155-cm-002",
+                    "press_enter": false
+                },
+                "dependencies": [
+                    "wait_for_portal_load"
+                ]
+            },
+            {
+                "node_id": "input_month",
+                "action": "visual_type",
+                "parameters": {
+                    "target": "Month dropdown",
+                    "text": "MA26",
+                    "press_enter": false
+                },
+                "dependencies": [
+                    "input_pin"
+                ]
+            },
+            {
+                "node_id": "input_semester",
+                "action": "visual_type",
+                "parameters": {
+                    "target": "Semester dropdown",
+                    "text": "4th",
+                    "press_enter": false
+                },
+                "dependencies": [
+                    "input_month"
+                ]
+            },
+            {
+                "node_id": "submit_form",
+                "action": "press_key",
+                "parameters": {
+                    "key": "enter",
+                    "count": 1
+                },
+                "dependencies": [
+                    "input_semester"
+                ]
+            },
+            {
+                "node_id": "wait_for_results",
+                "action": "wait",
+                "parameters": {
+                    "seconds": 5.0
+                },
+                "dependencies": [
+                    "submit_form"
+                ]
+            },
+            {
+                "node_id": "capture_results",
+                "action": "take_screenshot",
+                "parameters": {},
+                "dependencies": [
+                    "wait_for_results"
+                ]
+            }
+        ],
+        "frequency": 5,
+        "created_at": 1790483580.965711,
+        "last_executed": 1790485411.115336,
+        "examples": [
+            "https://sbtet.ap.gov.in/apsbtet/gradewiseresults.do this is the portal of my diploma to check the results now check the results of mine pin is 24155-cm-002 month is ma26 semester is 4th"
+        ]
+    },
+    "pattern_set_volume_to_50": {
+        "id": "pattern_set_volume_to_50",
+        "template_goal": "set volume to 50",
+        "slots": [],
+        "workflow_template": [
+            {
+                "node_id": "adjust_volume_to_50",
+                "action": "adjust_volume",
+                "parameters": {
+                    "level": 50
+                },
+                "dependencies": []
+            }
+        ],
+        "frequency": 1,
+        "created_at": 1790485395.3679557,
+        "last_executed": 1790485395.3679557,
+        "examples": [
+            "set volume to 50"
+        ]
+    }
+}

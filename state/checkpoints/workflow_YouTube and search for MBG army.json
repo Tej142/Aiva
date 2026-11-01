@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_YouTube and search for MBG army",
+  "current_step": "search_youtube_mbg_army",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "search_youtube_mbg_army"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789269903.9912162
+}

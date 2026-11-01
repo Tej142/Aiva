@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_set volume to 50",
+  "current_step": "adjust_volume_to_50",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "adjust_volume_to_50"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790485366.9335153
+}

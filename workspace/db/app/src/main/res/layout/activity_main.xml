@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:an="http://schemas.android.com/apk/res/android"
+    an:layout_width="match_parent"
+    an:gravity="center"
+    an:orientation="vertical"
+    an:layout_height="match_parent">
+
+    <EditText
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/et1"
+        an:hint="Enter ID:"/>
+    <EditText
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/et2"
+        an:hint="Enter Name:"/>
+    <EditText
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/et3"
+        an:hint="Enter the age:"/>
+
+    <TextView
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/tv"/>
+
+    <Button
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/ins"
+        an:text="Insert"/>
+
+    <Button
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/upt"
+        an:text="Update"/>
+
+    <Button
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/dis"
+        an:text="Display"/>
+
+    <Button
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/del"
+        an:text="Delete"/>
+</LinearLayout>

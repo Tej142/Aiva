@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_tell me what is my name",
+  "current_step": "ask_for_name",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "ask_for_name"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783252228.540053
+}

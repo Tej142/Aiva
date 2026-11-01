@@ -1,0 +1,18 @@
+{
+  "workflow_id": "workflow_open chrome and open youtube and search for mbg army",
+  "current_step": "search_mbg_army",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_chrome",
+      "open_youtube",
+      "search_mbg_army"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783335494.583872
+}

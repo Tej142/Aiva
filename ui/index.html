@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIVA — AI Assistant</title>
+    <meta name="description" content="AIVA autonomous AI assistant control panel">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233ecfcf'/><text x='7' y='23' font-size='18' font-weight='700' fill='%23000'>A</text></svg>">
+</head>
+<body>
+
+<div class="app-container">
+
+    <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+
+        <div class="brand-section">
+            <div class="brand-logo">
+                <div class="logo-inner">A</div>
+            </div>
+            <div class="brand-text">
+                <h2>AIVA</h2>
+                <span class="badge-status">
+                    <span class="status-dot"></span>
+                    Kernel Online
+                </span>
+            </div>
+        </div>
+
+        <nav class="nav-menu">
+            <button class="nav-item active" data-tab="chat-view" id="nav-chat">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                <span>Command Center</span>
+            </button>
+            <button class="nav-item" data-tab="workflows-view" id="nav-workflows">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                </svg>
+                <span>DAG Workflows</span>
+            </button>
+            <button class="nav-item" data-tab="memory-view" id="nav-memory">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                </svg>
+                <span>Memory &amp; Skills</span>
+            </button>
+            <button class="nav-item" data-tab="system-view" id="nav-system">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                    <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                </svg>
+                <span>Vision &amp; Hardware</span>
+            </button>
+        </nav>
+
+        <!-- Voice Mode -->
+        <div class="voice-mode-widget">
+            <div class="voice-header">
+                <span class="widget-title">Voice Runtime</span>
+                <span id="voice-indicator-badge" class="badge-mini active">ADAPTIVE</span>
+            </div>
+            <div class="mode-toggles mode-toggles-3">
+                <button class="mode-btn active" id="btn-mode-adaptive" title="Adaptive dialogue, follow-up listening & auto-sleep">Adaptive</button>
+                <button class="mode-btn" id="btn-mode-wakeword" title="Strict 'Hey AIVA' required for every command">Wake Word</button>
+                <button class="mode-btn" id="btn-mode-allvoice" title="Continuous open microphone">All Voice</button>
+            </div>
+            <button class="voice-toggle-main" id="btn-toggle-voice">
+                <span class="mic-icon">🎙</span>
+                <span id="voice-btn-label">Voice Active</span>
+            </button>
+        </div>
+
+    </aside>
+
+    <!-- ── Main Content ──────────────────────────────────────────────── -->
+    <main class="main-content">
+
+        <!-- Top Bar -->
+        <header class="top-hud">
+            <div class="hud-left">
+                <span class="system-time" id="live-clock">--:--:--</span>
+                <span class="user-greeting">Welcome, <strong id="user-display-name">Charan</strong></span>
+            </div>
+            <div class="hud-center">
+                <div class="neural-core-wrapper" id="neural-core">
+                    <div class="core-ring core-outer"></div>
+                    <div class="core-ring core-mid"></div>
+                    <div class="core-center-orb"></div>
+                </div>
+            </div>
+            <div class="hud-right">
+                <button class="hud-btn" id="btn-quick-inspect">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Inspect Screen
+                </button>
+                <button class="hud-btn" id="btn-quick-screenshot">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    Screenshot
+                </button>
+                <div class="api-health-pill">
+                    <span class="dot-green"></span>
+                    <span id="api-status-label">17 Keys Active</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ── Tab 1: Command Center ─────────────────────────────────── -->
+        <section class="tab-pane active" id="chat-view">
+
+            <!-- Chat Area -->
+            <div class="chat-container">
+                <div class="chat-history" id="chat-messages">
+                    <div class="message aiva-msg">
+                        <div class="msg-avatar">AI</div>
+                        <div class="msg-body">
+                            <div class="msg-header">
+                                <span class="msg-sender">AIVA</span>
+                                <span class="msg-time">Just now</span>
+                            </div>
+                            <div class="msg-text">
+                                System online. 17 API keys ready, vision enabled, voice active. How can I help?
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-bar">
+                    <button class="icon-btn" id="btn-screen-context" title="Attach screen context">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    </button>
+                    <input type="text" id="user-prompt-input" placeholder="Type a command or ask anything..." autocomplete="off">
+                    <button class="icon-btn mic-btn" id="btn-mic-input" title="Voice input">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" y1="19" x2="12" y2="23"/>
+                            <line x1="8" y1="23" x2="16" y2="23"/>
+                        </svg>
+                    </button>
+                    <button class="send-btn" id="btn-send-prompt">
+                        Send
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Telemetry Panel -->
+            <aside class="telemetry-panel">
+
+                <div>
+                    <p class="section-title">Quick Actions</p>
+                    <div class="quick-tools-grid">
+                        <button class="tool-card" onclick="triggerQuickCommand('what is currently on my screen?')">
+                            <span class="tool-icon">👁️</span>
+                            <div class="tool-meta">
+                                <strong>Inspect Screen</strong>
+                                <small>Gemini Vision</small>
+                            </div>
+                        </button>
+                        <button class="tool-card" onclick="triggerQuickCommand('open youtube and search trending tech news')">
+                            <span class="tool-icon">▶</span>
+                            <div class="tool-meta">
+                                <strong>YouTube Search</strong>
+                                <small>Browser Automation</small>
+                            </div>
+                        </button>
+                        <button class="tool-card" onclick="triggerQuickCommand('open notepad')">
+                            <span class="tool-icon">📄</span>
+                            <div class="tool-meta">
+                                <strong>Open Notepad</strong>
+                                <small>OS Application</small>
+                            </div>
+                        </button>
+                        <button class="tool-card" onclick="triggerQuickCommand('set volume to 50')">
+                            <span class="tool-icon">🔊</span>
+                            <div class="tool-meta">
+                                <strong>Set Volume</strong>
+                                <small>Win32 Audio</small>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="section-title">Engine Stats</p>
+                    <div class="stat-boxes">
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Patterns</span>
+                            <span class="stat-val" id="stat-patterns-count">—</span>
+                        </div>
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Groq Pool</span>
+                            <span class="stat-val text-green">7</span>
+                        </div>
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Gemini</span>
+                            <span class="stat-val text-cyan">5</span>
+                        </div>
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Mistral</span>
+                            <span class="stat-val text-purple">5</span>
+                        </div>
+                    </div>
+                </div>
+
+            </aside>
+        </section>
+
+        <!-- ── Tab 2: DAG Workflows ──────────────────────────────────── -->
+        <section class="tab-pane" id="workflows-view">
+            <div class="workflows-container glass-panel" style="flex:1; overflow-y:auto;">
+                <div class="pane-header">
+                    <h2>DAG Workflows</h2>
+                    <span class="tag-pill">Sub-ms Replay</span>
+                </div>
+                <div class="workflow-tree-view" id="workflow-tree-display">
+                    <div class="workflow-node-card glass-card">
+                        <div class="node-badge success">COMPLETED</div>
+                        <h4>inspect_screen_content</h4>
+                        <p>Action: <code>inspect_screen</code> — Active Desktop Window</p>
+                    </div>
+                    <div class="workflow-connector"></div>
+                    <div class="workflow-node-card glass-card">
+                        <div class="node-badge running">ACTIVE</div>
+                        <h4>speak_summary_voice</h4>
+                        <p>Action: <code>speak</code> — Edge Neural Prabhat</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Tab 3: Memory & Skills ────────────────────────────────── -->
+        <section class="tab-pane" id="memory-view">
+            <div class="memory-grid">
+                <div class="memory-column glass-panel">
+                    <h3>User Identity</h3>
+                    <div class="memory-list" id="user-facts-list">
+                        <div class="memory-entry glass-card">
+                            <strong>Name</strong>
+                            <p id="fact-name-val">Charan</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="memory-column glass-panel">
+                    <h3>Learned Task Recipes</h3>
+                    <div class="memory-list" id="task-recipes-list">
+                        <!-- populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Tab 4: Vision & Hardware ─────────────────────────────── -->
+        <section class="tab-pane" id="system-view">
+            <div class="system-monitor-grid">
+                <div class="monitor-card glass-panel">
+                    <h3>Active Screen Snapshot</h3>
+                    <div class="screen-preview-box" id="screen-preview-holder">
+                        <div class="placeholder-text">Click Inspect Screen or ask AIVA to capture the desktop</div>
+                    </div>
+                    <button class="action-btn" onclick="triggerQuickCommand('what is on my screen?')">Capture &amp; Analyze</button>
+                </div>
+                <div class="monitor-card glass-panel">
+                    <h3>Capability Registry</h3>
+                    <ul class="capability-list" id="capability-list-view">
+                        <li><span class="cap-badge">open_url</span> Browser automation &amp; tab deduplication</li>
+                        <li><span class="cap-badge">launch_app</span> Windows Start Menu discovery</li>
+                        <li><span class="cap-badge">visual_click</span> Vision-based UI clicking</li>
+                        <li><span class="cap-badge">visual_type</span> Vision-based input &amp; paste</li>
+                        <li><span class="cap-badge">inspect_screen</span> Gemini 2.5 multimodal vision</li>
+                        <li><span class="cap-badge">media_control</span> Play, pause, skip system audio</li>
+                        <li><span class="cap-badge">adjust_volume</span> Win32 system audio control</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "workflow_id": "workflow_Research Artificial Intelligence deeply.",
+  "current_step": "ai_future_trends",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "ai_overview",
+      "ai_history",
+      "ai_types",
+      "ai_ethics",
+      "ai_applications",
+      "ai_machine_learning",
+      "ai_deep_learning",
+      "ai_recent_advancements",
+      "ai_future_trends"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782616992.6565166
+}

@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_hi there!",
+  "current_step": "greet_user",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "greet_user"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783236945.6291895
+}

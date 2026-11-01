@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_search for lg tv reviews in youtube",
+  "current_step": "search_lg_tv_reviews_youtube",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "search_lg_tv_reviews_youtube"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1788672673.3296542
+}

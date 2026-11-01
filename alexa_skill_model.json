@@ -1,0 +1,74 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "aiva",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": [
+            "help",
+            "what can you do",
+            "how to use aiva"
+          ]
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": [
+            "stop",
+            "exit",
+            "quit",
+            "bye",
+            "goodbye",
+            "close aiva",
+            "turn off"
+          ]
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AivaPromptIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "tell me {query}",
+            "ask {query}",
+            "please {query}",
+            "can you {query}",
+            "search {query}",
+            "search for {query}",
+            "open {query}",
+            "research {query}",
+            "execute {query}",
+            "run {query}",
+            "launch {query}",
+            "remember {query}",
+            "remember that {query}",
+            "play {query}",
+            "what is {query}",
+            "who is {query}",
+            "i want to {query}",
+            "do {query}",
+            "say {query}",
+            "check {query}",
+            "look up {query}"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}

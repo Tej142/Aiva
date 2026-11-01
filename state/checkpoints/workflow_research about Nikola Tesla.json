@@ -1,0 +1,18 @@
+{
+  "workflow_id": "workflow_research about Nikola Tesla",
+  "current_step": "research_nikola_tesla_controversies",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_nikola_tesla_biography",
+      "research_nikola_tesla_inventions",
+      "research_nikola_tesla_controversies"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783235387.5752575
+}

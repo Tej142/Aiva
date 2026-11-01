@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_create an temporary account",
+  "current_step": "research_temp_account_services",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_temp_account_services"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1784096650.2302895
+}

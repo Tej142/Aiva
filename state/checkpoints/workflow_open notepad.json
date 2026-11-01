@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_open Notepad",
+  "current_step": "launch_notepad",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_notepad"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790265992.6475744
+}

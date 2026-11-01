@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_open instagram",
+  "current_step": "open_instagram",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_instagram"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789278428.5405495
+}

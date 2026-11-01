@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_open whatsapp and msg hi to pujiii",
+  "current_step": "launch_whatsapp_app",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_whatsapp_app"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789278428.5405495
+}

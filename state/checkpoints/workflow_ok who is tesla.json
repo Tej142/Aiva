@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_ok who is tesla",
+  "current_step": "research_tesla",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_tesla"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783235387.5752575
+}

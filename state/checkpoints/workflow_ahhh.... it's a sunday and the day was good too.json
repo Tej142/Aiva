@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_ahhh.... it's a sunday and the day was good too",
+  "current_step": "acknowledge_user_sentiment",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "acknowledge_user_sentiment"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783249370.1218758
+}

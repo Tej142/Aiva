@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_5th semester",
+  "current_step": "research_5th_semester",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "research_5th_semester"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783254455.2137885
+}

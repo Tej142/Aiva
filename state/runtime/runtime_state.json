@@ -1,0 +1,10 @@
+{
+    "runtime_active": true,
+    "active_agents": [
+        "planner_agent",
+        "observer_agent",
+        "browser_agent",
+        "memory_agent",
+        "research_agent"
+    ]
+}

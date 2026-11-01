@@ -1,0 +1,8 @@
+{
+    "chrome": "google-chrome",
+    "vscode": "code",
+    "notepad": "gedit",
+    "calculator": "gnome-calculator",
+    "settings": "gnome-control-center",
+    "files": "nautilus"
+}

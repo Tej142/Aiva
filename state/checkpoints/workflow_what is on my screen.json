@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_what is on my screen",
+  "current_step": "inspect_screen_content",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "inspect_screen_content"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1790264477.4960434
+}

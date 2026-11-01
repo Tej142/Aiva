@@ -1,0 +1,19 @@
+{
+  "workflow_id": "workflow_Research Artificial Intelligence.",
+  "current_step": "ai_types",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "wikipedia_ai",
+      "history_of_ai",
+      "ai_applications",
+      "ai_types"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1782616951.2373128
+}

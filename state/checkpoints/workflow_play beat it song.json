@@ -1,0 +1,17 @@
+{
+  "workflow_id": "workflow_play beat it song",
+  "current_step": "play_media_task",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "launch_apple_music_app",
+      "play_media_task"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1788682440.386772
+}

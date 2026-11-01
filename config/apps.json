@@ -1,0 +1,11 @@
+{
+    "chrome": {
+        "Windows": "start chrome",
+        "Linux": "google-chrome"
+    },
+
+    "vscode": {
+        "Windows": "code",
+        "Linux": "code"
+    }
+}

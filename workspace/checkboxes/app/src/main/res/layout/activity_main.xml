@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:an="http://schemas.android.com/apk/res/android"
+    an:layout_width="match_parent"
+    an:layout_height="match_parent"
+    an:gravity="center">
+    <CheckBox
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/cb1"
+        an:text="Music"/>
+    <CheckBox
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:id="@+id/cb2"
+        an:text="Playing"/>
+    <Button
+        an:layout_width="wrap_content"
+        an:layout_height="wrap_content"
+        an:text="Submit"
+        an:id="@+id/btn"/>
+</LinearLayout>

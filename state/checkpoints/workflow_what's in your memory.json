@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_what's in your memory",
+  "current_step": "query_memory",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "query_memory"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1783250829.676508
+}

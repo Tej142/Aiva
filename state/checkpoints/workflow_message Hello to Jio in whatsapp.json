@@ -1,0 +1,27 @@
+{
+  "workflow_id": "workflow_message Hello to Jio in whatsapp",
+  "current_step": "send_message",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_whatsapp_web",
+      "wait_for_whatsapp_load",
+      "focus_whatsapp_window",
+      "reset_active_search",
+      "focus_whatsapp_search",
+      "type_contact_name",
+      "wait_for_search_results",
+      "highlight_top_result",
+      "select_contact",
+      "wait_chat_ready",
+      "type_message_content",
+      "send_message"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1789280711.5238197
+}

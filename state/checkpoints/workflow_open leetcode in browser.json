@@ -1,0 +1,16 @@
+{
+  "workflow_id": "workflow_open leetcode in browser",
+  "current_step": "open_leetcode",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "open_leetcode"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1784096650.2302895
+}
