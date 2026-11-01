@@ -1,4 +1,4 @@
-﻿import io
+import io
 import os
 import re
 import json
@@ -6,7 +6,10 @@ import time
 import platform
 from typing import Optional, Dict, Any, Tuple
 from PIL import Image
-import pyautogui
+try:
+    import pyautogui
+except Exception:
+    pyautogui = None
 
 from google import genai
 from google.genai import types
