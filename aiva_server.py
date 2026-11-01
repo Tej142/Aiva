@@ -179,16 +179,15 @@ def api_chat():
     if not msg:
         return jsonify({"status": "error", "error": "Missing message"}), 400
 
-    # User identification: from JWT bearer token / cookie or fallback to primary user
+    # Strict user identification: require authenticated session
     auth_user = get_authenticated_user()
-    if auth_user and kernel:
-        kernel.active_user_id = auth_user["id"]
-    elif kernel and not kernel.active_user_id:
-        primary = db.get_primary_user()
-        if primary:
-            kernel.active_user_id = primary["id"]
+    if not auth_user:
+        return jsonify({"status": "error", "error": "Authentication required. Please log in."}), 401
 
-    uid_log = kernel.active_user_id if kernel else "none"
+    if kernel:
+        kernel.set_active_user(auth_user["id"])
+
+    uid_log = auth_user["id"]
     print(f"\n[Web UI Chat Query]: {msg} (User: {uid_log})")
     try:
         # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
@@ -240,11 +239,12 @@ def api_status():
 def auth_register():
     data = request.json or {}
     email = data.get("email", "").strip()
+    name = data.get("name", "").strip()
     if not email:
         return jsonify({"status": "error", "message": "Email address is required."}), 400
 
     ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    success, msg = auth_service.request_otp(email, ip_address=ip)
+    success, msg = auth_service.request_otp(email, ip_address=ip, name=name)
     if not success:
         return jsonify({"status": "error", "message": msg}), 400
 
@@ -271,11 +271,12 @@ def auth_verify_otp():
     data = request.json or {}
     email = data.get("email", "").strip()
     otp = str(data.get("otp", "")).strip()
+    name = data.get("name", "").strip()
 
     if not email or not otp:
         return jsonify({"status": "error", "message": "Email and 6-digit OTP code are required."}), 400
 
-    success, msg, result = auth_service.verify_otp(email, otp)
+    success, msg, result = auth_service.verify_otp(email, otp, name=name)
     if not success:
         return jsonify({"status": "error", "message": msg}), 400
 
@@ -295,6 +296,15 @@ def auth_verify_otp():
         samesite="Lax"
     )
     return response
+
+
+@app.route("/api/auth/onboarding", methods=["POST"])
+@require_auth
+def auth_onboarding(user):
+    data = request.json or {}
+    name = data.get("name", "").strip()
+    db.update_user(user["id"], name=name or None, onboarded=1)
+    return jsonify({"status": "success", "message": "Onboarding completed successfully."})
 
 
 @app.route("/api/auth/refresh", methods=["POST"])
@@ -346,12 +356,15 @@ def auth_me(user):
     for dev in devices:
         dev["is_online"] = dev["id"] in online_ids
 
+    fresh_user = db.get_user_by_id(user["id"]) or user
     return jsonify({
         "status": "success",
         "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "created_at": user["created_at"]
+            "id": fresh_user["id"],
+            "email": fresh_user["email"],
+            "name": fresh_user.get("name", ""),
+            "onboarded": fresh_user.get("onboarded", 0),
+            "created_at": fresh_user["created_at"]
         },
         "devices": devices
     })
@@ -456,50 +469,41 @@ def ws_device_endpoint(ws):
 
 
 @app.route("/api/memory", methods=["GET"])
-def api_memory():
-    """Fetches user memory and learned task pattern recipes."""
-    user_mem = {}
-    task_patterns = {}
-
-    if kernel:
-        try:
-            if hasattr(kernel, "user_memory_service") and kernel.user_memory_service:
-                user_mem = kernel.user_memory_service.get_all()
-        except Exception:
-            pass
-
-        try:
-            if hasattr(kernel, "task_pattern_service") and kernel.task_pattern_service:
-                task_patterns = kernel.task_pattern_service.patterns
-        except Exception:
-            pass
-
-    # Fallback to direct file loading if kernel services were empty
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    if not user_mem:
-        for p in [os.path.join(base_dir, "memory", "user_memory.json"), os.path.join(base_dir, "storage", "user_memory.json")]:
-            if os.path.exists(p):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        user_mem = json.load(f)
-                    break
-                except Exception:
-                    pass
-
-    if not task_patterns:
-        for p in [os.path.join(base_dir, "memory", "task_patterns.json"), os.path.join(base_dir, "storage", "task_patterns.json")]:
-            if os.path.exists(p):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        task_patterns = json.load(f)
-                    break
-                except Exception:
-                    pass
-
+@require_auth
+def api_memory(user):
+    """Fetches user memory and learned task patterns scoped strictly to the authenticated user."""
+    uid = user["id"]
+    user_mem = db.get_user_memories(uid)
+    task_patterns = db.get_user_task_patterns(uid)
     return jsonify({
+        "status": "success",
         "user_memory": user_mem,
         "task_patterns": task_patterns
     })
+
+
+@app.route("/api/history", methods=["GET", "DELETE"])
+@require_auth
+def api_history(user):
+    """Fetches or clears conversation history scoped strictly to the authenticated user."""
+    uid = user["id"]
+    if request.method == "DELETE":
+        db.clear_conversation_history(uid)
+        return jsonify({"status": "success", "message": "Conversation history cleared."})
+    history = db.get_conversation_history(uid, limit=100)
+    return jsonify({"status": "success", "history": history})
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+@require_auth
+def api_user_settings(user):
+    """Fetches or saves personal user settings/preferences."""
+    uid = user["id"]
+    if request.method == "POST":
+        settings_data = request.json or {}
+        db.set_user_settings(uid, settings_data)
+        return jsonify({"status": "success", "settings": settings_data})
+    return jsonify({"status": "success", "settings": db.get_user_settings(uid)})
 
 
 # =====================================================================

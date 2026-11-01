@@ -1,9 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('aivaAgent', {
+  // Window Controls
+  windowControl: (action) => ipcRenderer.invoke('window:control', action),
+
   // Authentication
+  register: ({ name, email }) => ipcRenderer.invoke('auth:register', { name, email }),
   requestOtp: (email) => ipcRenderer.invoke('auth:requestOtp', email),
-  verifyOtp: (email, otp) => ipcRenderer.invoke('auth:verifyOtp', { email, otp }),
+  verifyOtp: ({ email, otp, name }) => ipcRenderer.invoke('auth:verifyOtp', { email, otp, name }),
+  completeOnboarding: (name) => ipcRenderer.invoke('auth:onboarding', name),
   getMe: () => ipcRenderer.invoke('auth:getMe'),
   logout: () => ipcRenderer.invoke('auth:logout'),
 
@@ -12,6 +17,13 @@ contextBridge.exposeInMainWorld('aivaAgent', {
   saveConfig: (data) => ipcRenderer.invoke('config:save', data),
   getDeviceStatus: () => ipcRenderer.invoke('device:getStatus'),
   reconnectDevice: () => ipcRenderer.invoke('device:reconnect'),
+
+  // Data & History
+  getHistory: () => ipcRenderer.invoke('data:getHistory'),
+  clearHistory: () => ipcRenderer.invoke('data:clearHistory'),
+  getSettings: () => ipcRenderer.invoke('data:getSettings'),
+  saveSettings: (settings) => ipcRenderer.invoke('data:saveSettings', settings),
+  getAuditLogs: (limit) => ipcRenderer.invoke('data:getAuditLogs', limit),
 
   // Permissions
   getPermissions: () => ipcRenderer.invoke('permissions:get'),
@@ -28,4 +40,3 @@ contextBridge.exposeInMainWorld('aivaAgent', {
     ipcRenderer.on('device:activity', (_event, data) => callback(data));
   }
 });
-

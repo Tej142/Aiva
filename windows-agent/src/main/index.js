@@ -20,7 +20,11 @@ let currentDeviceStatus = { state: 'disconnected', message: 'Not connected.' };
 const activityLogs = [];
 
 function createTrayIcon() {
-  // Generate a clean 16x16 tray icon programmatically (Cyan dot for AIVA)
+  const iconPath = path.join(__dirname, '..', '..', 'build', 'icon.png');
+  const fs = require('fs');
+  if (fs.existsSync(iconPath)) {
+    return nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  }
   const size = 16;
   const canvas = Buffer.alloc(size * size * 4);
   for (let y = 0; y < size; y++) {
@@ -29,9 +33,9 @@ function createTrayIcon() {
       const dx = x - 8;
       const dy = y - 8;
       if (dx * dx + dy * dy <= 36) {
-        canvas[idx] = 56;     // B
-        canvas[idx + 1] = 189; // G
-        canvas[idx + 2] = 248; // R
+        canvas[idx] = 241;     // B
+        canvas[idx + 1] = 102; // G
+        canvas[idx + 2] = 99;  // R
         canvas[idx + 3] = 255; // A
       } else {
         canvas[idx + 3] = 0;   // Transparent
@@ -50,16 +54,29 @@ function updateTrayMenu() {
     ? '🟡 Connecting...'
     : '⚪ Disconnected';
 
+  const isPaused = Boolean(executor && executor.isPaused);
+
   const contextMenu = Menu.buildFromTemplate([
     { label: 'AIVA Device Agent', enabled: false },
     { label: statusText, enabled: false },
     { type: 'separator' },
     {
-      label: 'Open AIVA HUD',
+      label: 'Open AIVA',
       click: () => {
         if (mainWindow) {
           mainWindow.show();
           mainWindow.focus();
+        }
+      }
+    },
+    {
+      label: isPaused ? '▶️ Resume Control' : '⏸️ Pause Control',
+      type: 'checkbox',
+      checked: isPaused,
+      click: (item) => {
+        if (executor) {
+          executor.isPaused = item.checked;
+          updateTrayMenu();
         }
       }
     },
@@ -81,7 +98,7 @@ function updateTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: 'Quit AIVA Agent',
+      label: 'Quit',
       click: () => {
         isQuitting = true;
         app.quit();
@@ -90,7 +107,7 @@ function updateTrayMenu() {
   ]);
 
   tray.setContextMenu(contextMenu);
-  tray.setToolTip(`AIVA Device Agent (${currentDeviceStatus.state})`);
+  tray.setToolTip(`AIVA Device Agent (${currentDeviceStatus.state}${isPaused ? ' - Paused' : ''})`);
 }
 
 function createWindow() {
@@ -100,7 +117,9 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'AIVA Device Agent',
-    backgroundColor: '#0a0e17',
+    backgroundColor: '#0B0D12',
+    frame: false,
+    titleBarStyle: 'hidden',
     icon: createTrayIcon(),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
@@ -138,8 +157,6 @@ function createWindow() {
   });
 
   // Decide initial screen:
-  // If user has a valid device token stored, open main UI with embedded HUD;
-  // Otherwise open login screen.
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
   if (deviceToken) {
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'main.html'));
@@ -152,7 +169,34 @@ function createWindow() {
 // IPC HANDLERS
 // ---------------------------------------------------------------------
 function setupIpcHandlers() {
-  // Auth: Request OTP
+  // Window Controls (Frameless Title Bar)
+  ipcMain.handle('window:control', (_event, action) => {
+    if (!mainWindow) return;
+    if (action === 'minimize') mainWindow.minimize();
+    else if (action === 'maximize') {
+      if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      else mainWindow.maximize();
+    } else if (action === 'close') {
+      mainWindow.close();
+    }
+  });
+
+  // Auth: Register (name + email)
+  ipcMain.handle('auth:register', async (_event, { name, email }) => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    try {
+      const resp = await fetch(`${serverUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email })
+      });
+      return await resp.json();
+    } catch (err) {
+      return { status: 'error', message: `Server connection failed: ${err.message}` };
+    }
+  });
+
+  // Auth: Request OTP (login only email)
   ipcMain.handle('auth:requestOtp', async (_event, email) => {
     const serverUrl = store.get('serverUrl', 'http://localhost:5000');
     try {
@@ -161,22 +205,21 @@ function setupIpcHandlers() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await resp.json();
-      return data;
+      return await resp.json();
     } catch (err) {
       return { status: 'error', message: `Server connection failed: ${err.message}` };
     }
   });
 
   // Auth: Verify OTP and Register Device
-  ipcMain.handle('auth:verifyOtp', async (_event, { email, otp }) => {
+  ipcMain.handle('auth:verifyOtp', async (_event, { email, otp, name }) => {
     const serverUrl = store.get('serverUrl', 'http://localhost:5000');
     try {
       // 1. Verify OTP
       const verifyResp = await fetch(`${serverUrl}/api/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp })
+        body: JSON.stringify({ email, otp, name })
       });
       const verifyData = await verifyResp.json();
       if (verifyData.status !== 'success') {
@@ -185,9 +228,11 @@ function setupIpcHandlers() {
 
       const accessToken = verifyData.tokens.access_token;
       const refreshToken = verifyData.tokens.refresh_token;
-      const userId = verifyData.user.id;
 
       store.set('userEmail', email);
+      if (verifyData.user && verifyData.user.name) {
+        store.set('userName', verifyData.user.name);
+      }
       store.setEncrypted('encryptedAccessToken', accessToken);
       store.setEncrypted('encryptedRefreshToken', refreshToken);
 
@@ -228,6 +273,27 @@ function setupIpcHandlers() {
     }
   });
 
+  // Auth: Onboarding
+  ipcMain.handle('auth:onboarding', async (_event, name) => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return { status: 'error', message: 'Not authenticated' };
+    try {
+      const resp = await fetch(`${serverUrl}/api/auth/onboarding`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ name })
+      });
+      if (name) store.set('userName', name);
+      return await resp.json();
+    } catch (err) {
+      return { status: 'error', message: err.message };
+    }
+  });
+
   // Auth: Get Me
   ipcMain.handle('auth:getMe', async () => {
     const serverUrl = store.get('serverUrl', 'http://localhost:5000');
@@ -245,7 +311,7 @@ function setupIpcHandlers() {
     return null;
   });
 
-  // Auth: Logout
+  // Auth: Logout (Clears auth tokens and session storage completely)
   ipcMain.handle('auth:logout', async () => {
     const serverUrl = store.get('serverUrl', 'http://localhost:5000');
     const refreshToken = store.getDecrypted('encryptedRefreshToken');
@@ -261,10 +327,95 @@ function setupIpcHandlers() {
 
     if (wsClient) wsClient.disconnect();
     store.clearAuth();
+
+    try {
+      await session.defaultSession.clearStorageData();
+    } catch {}
+
     if (mainWindow) {
       mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'login.html'));
     }
     return { status: 'success' };
+  });
+
+  // History & User Data
+  ipcMain.handle('data:getHistory', async () => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return [];
+    try {
+      const resp = await fetch(`${serverUrl}/api/history`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      const data = await resp.json();
+      return data.history || [];
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle('data:clearHistory', async () => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return false;
+    try {
+      const resp = await fetch(`${serverUrl}/api/history`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('data:getSettings', async () => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return {};
+    try {
+      const resp = await fetch(`${serverUrl}/api/settings`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      const data = await resp.json();
+      return data.settings || {};
+    } catch {
+      return {};
+    }
+  });
+
+  ipcMain.handle('data:saveSettings', async (_event, settings) => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return false;
+    try {
+      const resp = await fetch(`${serverUrl}/api/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify(settings)
+      });
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('data:getAuditLogs', async (_event, limit) => {
+    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    if (!accessToken) return [];
+    try {
+      const resp = await fetch(`${serverUrl}/api/devices/audit-logs?limit=${limit || 50}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      const data = await resp.json();
+      return data.audit_logs || [];
+    } catch {
+      return [];
+    }
   });
 
   // Config: Get / Save
@@ -272,6 +423,7 @@ function setupIpcHandlers() {
     return {
       serverUrl: store.get('serverUrl', 'http://localhost:5000'),
       userEmail: store.get('userEmail', ''),
+      userName: store.get('userName', ''),
       deviceId: store.get('deviceId', ''),
       deviceName: store.get('deviceName', ''),
       startWithWindows: store.get('startWithWindows', false),
@@ -352,7 +504,6 @@ app.whenReady().then(() => {
   setupIpcHandlers();
   createWindow();
 
-  // If already registered, initiate WebSocket connection
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
   if (deviceToken) {
     wsClient.connect();
@@ -372,4 +523,3 @@ app.on('before-quit', () => {
   isQuitting = true;
   if (wsClient) wsClient.disconnect();
 });
-

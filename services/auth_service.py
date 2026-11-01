@@ -123,7 +123,7 @@ class AuthService:
     # -------------------------------------------------------------
     # OTP GENERATION & VERIFICATION
     # -------------------------------------------------------------
-    def request_otp(self, email: str, ip_address: Optional[str] = None) -> Tuple[bool, str]:
+    def request_otp(self, email: str, ip_address: Optional[str] = None, name: str = "") -> Tuple[bool, str]:
         email = email.strip().lower()
         if not EMAIL_REGEX.match(email):
             return False, "Invalid email address format."
@@ -153,13 +153,14 @@ class AuthService:
             code_hash=code_hash,
             salt=salt,
             expires_at=expires_at,
-            ip_address=ip_address
+            ip_address=ip_address,
+            name=name
         )
 
         success, msg = self.send_brevo_otp_email(email, otp_code)
         return True, "Verification code sent to your email."
 
-    def verify_otp(self, email: str, code: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    def verify_otp(self, email: str, code: str, name: str = "") -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         email = email.strip().lower()
         code = str(code).strip()
 
@@ -185,12 +186,20 @@ class AuthService:
         # Mark OTP as used
         self.db.mark_otp_used(otp_record["id"])
 
+        # Determine user name
+        otp_name = otp_record["name"] if "name" in otp_record.keys() and otp_record["name"] else ""
+        resolved_name = (name or otp_name or "").strip()
+
         # Find or create user
         user = self.db.get_user_by_email(email)
         if not user:
             user_id = str(uuid.uuid4())
-            user = self.db.create_user(user_id=user_id, email=email)
+            user = self.db.create_user(user_id=user_id, email=email, name=resolved_name, onboarded=0)
             logger.info(f"New user registered: {email} ({user_id})")
+        else:
+            if resolved_name and not user.get("name"):
+                self.db.update_user(user["id"], name=resolved_name)
+                user["name"] = resolved_name
 
         # Generate JWT access token & refresh token
         tokens = self.generate_tokens(user["id"], user["email"])
@@ -198,6 +207,8 @@ class AuthService:
             "user": {
                 "id": user["id"],
                 "email": user["email"],
+                "name": user.get("name", ""),
+                "onboarded": user.get("onboarded", 0),
                 "created_at": user["created_at"]
             },
             "tokens": tokens

@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 
+const DEFAULT_SERVER_URL = process.env.AIVA_SERVER_URL || (app.isPackaged ? 'https://aiva-hub.duckdns.org' : 'http://localhost:5000');
+
 class SecureStore {
   constructor() {
     this.configPath = path.join(app.getPath('userData'), 'agent-config.json');
@@ -12,14 +14,20 @@ class SecureStore {
     try {
       if (fs.existsSync(this.configPath)) {
         const raw = fs.readFileSync(this.configPath, 'utf8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // Ensure production builds enforce HTTPS if packaged
+        if (app.isPackaged && parsed.serverUrl && !parsed.serverUrl.startsWith('https://')) {
+          parsed.serverUrl = DEFAULT_SERVER_URL;
+        }
+        return parsed;
       }
     } catch (e) {
       console.error('[SecureStore] Failed to read config:', e);
     }
     return {
-      serverUrl: 'http://localhost:5000',
+      serverUrl: DEFAULT_SERVER_URL,
       userEmail: '',
+      userName: '',
       deviceId: '',
       deviceName: '',
       encryptedAccessToken: null,
@@ -39,6 +47,12 @@ class SecureStore {
   }
 
   set(key, value) {
+    if (key === 'serverUrl') {
+      if (app.isPackaged && value && !value.startsWith('https://')) {
+        console.warn('[SecureStore] Insecure HTTP URL rejected in production build:', value);
+        return;
+      }
+    }
     this.data[key] = value;
     this._save();
   }

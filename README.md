@@ -227,7 +227,46 @@ cloudflared tunnel --url http://localhost:5000
 ```
 This generates an `https://<subdomain>.trycloudflare.com` URL that handles both `https://` REST APIs and `wss://` WebSockets at `/ws/device`.
 
-#### Option B: Nginx Reverse Proxy with WSS Support:
+#### Option B: Caddy Reverse Proxy with Automatic HTTPS & WSS (Recommended for Oracle Cloud):
+Caddy automatically provisions and renews Let's Encrypt TLS certificates, and natively handles WebSocket upgrades without manual header rewriting.
+
+1. **Open Ports 80 & 443 in Oracle Cloud VM Firewall**:
+```bash
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo netfilter-persistent save
+```
+*(Also ensure Ingress rules for TCP 80 & 443 are added to your Oracle Cloud VCN Security List).*
+
+2. **Install Caddy & Configure `/etc/caddy/Caddyfile`**:
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install caddy
+```
+
+3. **Caddyfile Configuration** (`/etc/caddy/Caddyfile`):
+```caddy
+your-aiva-domain.com {
+    # Reverse proxy both HTTP/HTTPS and WebSocket WSS to AIVA
+    reverse_proxy 127.0.0.1:5000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+```
+
+4. **Start Caddy Service**:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now caddy
+sudo systemctl reload caddy
+```
+
+#### Option C: Nginx Reverse Proxy with WSS Support:
 If using Nginx, ensure the `Upgrade` headers are forwarded:
 ```nginx
 server {
@@ -266,6 +305,59 @@ server {
     }
 }
 ```
+
+---
+
+## 🎨 Unified Design System (`tokens.css`)
+
+AIVA uses a shared, zero-dependency design system (`tokens.css`) across both the Web HUD (`ui/tokens.css`) and the Windows Companion App (`windows-agent/src/renderer/tokens.css`):
+
+- **Color Palette & Theme**:
+  - **Dark-First Default**: `#0B0D12` base canvas, layered elevation surfaces (`#11141D`, `#181B26`, `#222738`), and low-contrast borders (`rgba(255, 255, 255, 0.08)`).
+  - **Single Accent Color**: Calm Indigo/Violet (`#6366F1` with hover `#4F46E5` and focus glow `rgba(99, 102, 241, 0.25)`).
+  - **Light Theme**: Seamless toggle with `data-theme="light"` or `prefers-color-scheme` media query.
+- **Local Typography**:
+  - Bundles the **Inter** font family (Regular 400, Medium 500, SemiBold 600, Bold 700) directly as `.woff2` files inside `ui/fonts/` and `windows-agent/src/renderer/fonts/`.
+  - Zero external CDN dependencies ensures 100% offline functionality, privacy, and sub-millisecond font rendering.
+- **Micro-Interactions & Accessibility**:
+  - Consistent 8px spacing scale, rounded radius tiers (8px / 12px / 16px).
+  - High-visibility keyboard focus rings (`var(--focus-ring)`).
+  - Smooth 150ms-250ms cubic-bezier transitions with `prefers-reduced-motion` compliance.
+
+---
+
+## 💻 Building the Windows Companion App ("AIVA Device Agent")
+
+The companion app is built on **Electron 33** and packages into an NSIS Windows installer:
+
+### 1. Prerequisites:
+- Node.js 18+ (tested on Node 20.x LTS)
+- npm 9+
+
+### 2. Run in Development Mode:
+```powershell
+cd windows-agent
+npm install
+npm run start
+```
+
+### 3. Build Production Installer:
+```powershell
+cd windows-agent
+$env:CSC_IDENTITY_AUTO_DISCOVERY="false"
+npm run build
+```
+The output installer is generated at:
+`windows-agent/dist/AIVA Device Agent Setup 1.0.0.exe` (and copied to `storage/downloads/AIVA-Device-Agent-Setup-1.0.0.exe` for web distribution).
+
+### 4. Verification Screenshots:
+Automated test scripts capture all application views across dark and light themes:
+```powershell
+.\windows-agent\node_modules\electron\dist\electron.exe scripts/capture_screenshots.js
+```
+The resulting high-resolution captures are preserved in `docs/screenshots/`:
+- Auth: `login_dark.png`, `login_light.png`, `register_dark.png`, `register_light.png`, `otp_dark.png`, `otp_light.png`, `loading_dark.png`, `error_dark.png`
+- Main App: `home_dark.png`, `home_light.png`, `devices_dark.png`, `devices_light.png`, `activity_dark.png`, `activity_light.png`, `settings_dark.png`, `settings_light.png`
 
 ---
 

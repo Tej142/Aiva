@@ -1,47 +1,45 @@
 /* ==========================================================================
-   AIVA HUD — MINIMAL MODERN DARK UI
-   Design: Clean lines, muted palette, refined typography, zero noise
+   AIVA HUD — REFINED MODERN DESIGN SYSTEM
+   Connected to tokens.css (Linear/Raycast aesthetic, bundled local typography)
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
 :root {
-    /* Base surfaces */
-    --bg-base:        #0a0a0a;
-    --bg-surface:     #111111;
-    --bg-elevated:    #1a1a1a;
-    --bg-hover:       #222222;
-    --bg-active:      #2a2a2a;
+    /* Base surfaces aligned with tokens.css */
+    --bg-base:        #0B0D12;
+    --bg-surface:     #161A26;
+    --bg-elevated:    #1D2333;
+    --bg-hover:       rgba(255, 255, 255, 0.05);
+    --bg-active:      rgba(255, 255, 255, 0.08);
 
     /* Borders */
-    --border-subtle:  rgba(255,255,255,0.06);
-    --border-default: rgba(255,255,255,0.10);
-    --border-strong:  rgba(255,255,255,0.18);
+    --border-subtle:  rgba(255, 255, 255, 0.08);
+    --border-default: rgba(255, 255, 255, 0.12);
+    --border-strong:  rgba(255, 255, 255, 0.20);
 
-    /* Accent — single cohesive teal */
-    --accent:         #3ecfcf;
-    --accent-dim:     rgba(62,207,207,0.12);
-    --accent-glow:    rgba(62,207,207,0.25);
+    /* Unified Calm Indigo/Violet Accent */
+    --accent:         #6366F1;
+    --accent-dim:     rgba(99, 102, 241, 0.14);
+    --accent-glow:    rgba(99, 102, 241, 0.30);
 
     /* Status colors */
-    --green:  #22c55e;
-    --red:    #ef4444;
-    --amber:  #f59e0b;
-    --blue:   #3b82f6;
+    --green:  #10B981;
+    --red:    #EF4444;
+    --amber:  #F59E0B;
+    --blue:   #0EA5E9;
 
     /* Typography */
-    --text-1: #f4f4f5;
-    --text-2: #a1a1aa;
-    --text-3: #71717a;
-    --text-4: #3f3f46;
+    --text-1: #F8FAFC;
+    --text-2: #94A3B8;
+    --text-3: #64748B;
+    --text-4: #475569;
 
     --font:  'Inter', -apple-system, sans-serif;
-    --mono:  'JetBrains Mono', monospace;
+    --mono:  'JetBrains Mono', Consolas, monospace;
 
     /* Radius */
-    --r-sm: 6px;
-    --r-md: 10px;
-    --r-lg: 14px;
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
 }
 
 /* ─── Reset ─────────────────────────────────────────────────────────────── */

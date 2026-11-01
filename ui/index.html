@@ -3,13 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AIVA — AI Assistant</title>
+    <title>AIVA — Neural Assistant HUD</title>
     <meta name="description" content="AIVA autonomous AI assistant control panel">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="tokens.css">
     <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233ecfcf'/><text x='7' y='23' font-size='18' font-weight='700' fill='%23000'>A</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%236366F1'/><text x='7' y='23' font-size='18' font-weight='700' fill='%23FFF'>A</text></svg>">
 </head>
 <body>
 
@@ -25,7 +23,7 @@
             <div class="brand-text">
                 <h2>AIVA</h2>
                 <span class="badge-status">
-                    <span class="status-dot"></span>
+                    <span class="status-dot online"></span>
                     Kernel Online
                 </span>
             </div>
@@ -87,7 +85,7 @@
         <header class="top-hud">
             <div class="hud-left">
                 <span class="system-time" id="live-clock">--:--:--</span>
-                <span class="user-greeting">Welcome, <strong id="user-display-name">Charan</strong></span>
+                <span class="user-greeting">Welcome, <strong id="user-display-name">Guest</strong></span>
             </div>
             <div class="hud-center">
                 <div class="neural-core-wrapper" id="neural-core">
@@ -97,13 +95,13 @@
                 </div>
             </div>
             <div class="hud-right">
-                <a href="/download/windows-agent" class="hud-btn hud-btn-download" id="btn-download-app" title="Download Windows Companion Device Agent (.exe)" download="AIVA-Device-Agent-Setup-1.0.0.exe">
+                <a href="/download/windows-agent" class="btn btn-primary" id="btn-download-app" title="Download Windows Companion Device Agent (.exe)" download="AIVA-Device-Agent-Setup-1.0.0.exe" style="padding: 6px 14px; font-size: 13px;">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                    <span>Download Application</span>
+                    <span>Download Windows App</span>
                 </a>
                 <button class="hud-btn" id="btn-quick-inspect">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -112,6 +110,9 @@
                 <button class="hud-btn" id="btn-quick-screenshot">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                     Screenshot
+                </button>
+                <button class="btn btn-ghost" id="btn-web-logout" title="Log Out" style="display: none; padding: 6px 12px; font-size: 12px;">
+                    Log Out
                 </button>
                 <div class="api-health-pill">
                     <span class="dot-green"></span>
@@ -130,11 +131,11 @@
                         <div class="msg-avatar">AI</div>
                         <div class="msg-body">
                             <div class="msg-header">
-                                <span class="msg-sender">AIVA</span>
+                                <span class="msg-sender">AIVA Intelligence</span>
                                 <span class="msg-time">Just now</span>
                             </div>
                             <div class="msg-text">
-                                System online. 17 API keys ready, vision enabled, voice active. How can I help?
+                                System online. 17 API keys ready, vision enabled, multi-device routing active. How can I help you today?
                             </div>
                         </div>
                     </div>
@@ -177,21 +178,21 @@
                             <span class="tool-icon">▶</span>
                             <div class="tool-meta">
                                 <strong>YouTube Search</strong>
-                                <small>Browser Automation</small>
+                                <small>Device Browser</small>
                             </div>
                         </button>
                         <button class="tool-card" onclick="triggerQuickCommand('open notepad')">
                             <span class="tool-icon">📄</span>
                             <div class="tool-meta">
                                 <strong>Open Notepad</strong>
-                                <small>OS Application</small>
+                                <small>Windows App</small>
                             </div>
                         </button>
                         <button class="tool-card" onclick="triggerQuickCommand('set volume to 50')">
                             <span class="tool-icon">🔊</span>
                             <div class="tool-meta">
                                 <strong>Set Volume</strong>
-                                <small>Win32 Audio</small>
+                                <small>Device Audio</small>
                             </div>
                         </button>
                     </div>
@@ -251,16 +252,13 @@
                 <div class="memory-column glass-panel">
                     <h3>User Identity</h3>
                     <div class="memory-list" id="user-facts-list">
-                        <div class="memory-entry glass-card">
-                            <strong>Name</strong>
-                            <p id="fact-name-val">Charan</p>
-                        </div>
+                        <!-- populated per authenticated user -->
                     </div>
                 </div>
                 <div class="memory-column glass-panel">
                     <h3>Learned Task Recipes</h3>
                     <div class="memory-list" id="task-recipes-list">
-                        <!-- populated by JS -->
+                        <!-- populated per authenticated user -->
                     </div>
                 </div>
             </div>
@@ -292,6 +290,85 @@
         </section>
 
     </main>
+</div>
+
+<!-- Web HUD Authentication Overlay -->
+<div id="web-auth-overlay" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog" style="max-width: 440px;">
+        <div style="display: flex; justify-content: center; margin-bottom: var(--space-4);">
+            <div style="width: 48px; height: 48px; border-radius: var(--radius-md); background: var(--accent-gradient); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 24px; font-weight: 800;">A</div>
+        </div>
+
+        <!-- Mode Tabs -->
+        <div class="auth-tabs" id="web-auth-tabs" style="display: flex; background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 3px; margin-bottom: var(--space-5);">
+            <button class="auth-tab active" id="web-tab-login" style="flex: 1; padding: 7px; background: transparent; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer;">Sign In</button>
+            <button class="auth-tab" id="web-tab-register" style="flex: 1; padding: 7px; background: transparent; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer;">Register</button>
+        </div>
+
+        <div id="web-auth-error" class="form-error" style="display: none; padding: 10px 14px; background: var(--status-danger-bg); border-radius: var(--radius-sm); margin-bottom: var(--space-4);"></div>
+
+        <!-- Login Pane -->
+        <div id="web-pane-login">
+            <div class="form-header" style="text-align: center; margin-bottom: var(--space-4);">
+                <h3 style="font-size: var(--text-lg); font-weight: 600;">Sign in to AIVA</h3>
+                <p style="font-size: var(--text-xs); color: var(--text-secondary);">Enter your email to receive a login verification code.</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="web-login-email">Account Email</label>
+                <input type="email" id="web-login-email" class="form-input" placeholder="name@domain.com" autocomplete="email">
+            </div>
+            <button id="web-btn-login-submit" class="btn btn-primary" style="width: 100%; margin-top: var(--space-2);">
+                <span>Send Verification Code</span>
+            </button>
+        </div>
+
+        <!-- Register Pane -->
+        <div id="web-pane-register" style="display: none;">
+            <div class="form-header" style="text-align: center; margin-bottom: var(--space-4);">
+                <h3 style="font-size: var(--text-lg); font-weight: 600;">Create Account</h3>
+                <p style="font-size: var(--text-xs); color: var(--text-secondary);">Register to start using your cloud AIVA assistant.</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="web-reg-name">Full Name</label>
+                <input type="text" id="web-reg-name" class="form-input" placeholder="Alex Taylor" autocomplete="name">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="web-reg-email">Email Address</label>
+                <input type="email" id="web-reg-email" class="form-input" placeholder="alex@domain.com" autocomplete="email">
+            </div>
+            <label class="checkbox-label" style="display: flex; gap: 8px; font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: var(--space-4); cursor: pointer;">
+                <input type="checkbox" id="web-reg-terms">
+                <span>I agree to the Terms of Service and Privacy Policy</span>
+            </label>
+            <button id="web-btn-register-submit" class="btn btn-primary" style="width: 100%;">
+                <span>Create Account &amp; Send Code</span>
+            </button>
+        </div>
+
+        <!-- OTP Pane -->
+        <div id="web-pane-otp" style="display: none;">
+            <div class="form-header" style="text-align: center; margin-bottom: var(--space-4);">
+                <h3 style="font-size: var(--text-lg); font-weight: 600;">Verify Code</h3>
+                <p style="font-size: var(--text-xs); color: var(--text-secondary);" id="web-otp-hint">Enter the 6-digit code sent to your email.</p>
+            </div>
+            <div class="otp-container" id="web-otp-container" style="display: flex; justify-content: center; gap: 8px; margin: 16px 0;">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-1" inputmode="numeric">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-2" inputmode="numeric">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-3" inputmode="numeric">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-4" inputmode="numeric">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-5" inputmode="numeric">
+                <input type="text" maxlength="1" class="otp-box" id="web-otp-6" inputmode="numeric">
+            </div>
+            <button id="web-btn-otp-submit" class="btn btn-primary" style="width: 100%; margin-top: var(--space-3);">
+                <span>Verify Code</span>
+            </button>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: var(--space-4);">
+                <button id="web-btn-change-email" class="btn btn-ghost" style="font-size: var(--text-xs);">← Change Email</button>
+                <button id="web-btn-resend-otp" class="btn btn-ghost" style="font-size: var(--text-xs);">Resend Code</button>
+            </div>
+        </div>
+
+    </div>
 </div>
 
 <script src="app.js"></script>

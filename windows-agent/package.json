@@ -25,6 +25,7 @@
     },
     "forceCodeSigning": false,
     "win": {
+      "icon": "build/icon.ico",
       "sign": null,
       "signAndEditExecutable": false,
       "target": [
@@ -39,7 +40,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AIVA Device Agent"
+      "shortcutName": "AIVA Device Agent",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }

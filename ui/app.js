@@ -1,5 +1,6 @@
 // =====================================================================
-// AIVA HUD — JAVASCRIPT CLIENT CONTROLLER
+// AIVA HUD — JAVASCRIPT CLIENT CONTROLLER (ui/app.js)
+// Unified design system & authenticated session management
 // =====================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -8,7 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initChat();
     initSpeechRecognition();
     initVoiceModeControls();
-    loadMemoryData();
+    initWebAuthModal();
+    checkAuthStatus();
     pollSystemStatus();
 });
 
@@ -31,7 +33,352 @@ function initClock() {
 }
 
 // ---------------------------------------------------------------------
-// 2. Tab Navigation
+// 2. Authentication & Session Management
+// ---------------------------------------------------------------------
+function getAccessToken() {
+    return localStorage.getItem('aiva_access_token') || '';
+}
+
+function setTokens(tokens) {
+    if (tokens && tokens.access_token) {
+        localStorage.setItem('aiva_access_token', tokens.access_token);
+        if (tokens.refresh_token) {
+            localStorage.setItem('aiva_refresh_token', tokens.refresh_token);
+        }
+    }
+}
+
+function authHeaders() {
+    const token = getAccessToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+}
+
+function onAuthSuccess(user) {
+    const overlay = document.getElementById('web-auth-overlay');
+    if (overlay) overlay.style.display = 'none';
+
+    const logoutBtn = document.getElementById('btn-web-logout');
+    if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+
+    const userNameDisplay = document.getElementById('user-display-name');
+    if (userNameDisplay) {
+        userNameDisplay.textContent = user.name || user.email.split('@')[0];
+    }
+
+    // Load fresh data for this authenticated user
+    loadMemoryData();
+    loadConversationHistory();
+}
+
+function showWebAuthModal() {
+    const overlay = document.getElementById('web-auth-overlay');
+    if (overlay) overlay.style.display = 'flex';
+
+    const logoutBtn = document.getElementById('btn-web-logout');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+
+    const userNameDisplay = document.getElementById('user-display-name');
+    if (userNameDisplay) userNameDisplay.textContent = 'Guest';
+}
+
+async function checkAuthStatus() {
+    try {
+        const resp = await fetch('/api/auth/me', { headers: authHeaders() });
+        if (resp.status === 200) {
+            const data = await resp.json();
+            if (data.user) {
+                onAuthSuccess(data.user);
+                return true;
+            }
+        }
+    } catch (e) {
+        console.warn('Auth check failed:', e);
+    }
+    showWebAuthModal();
+    return false;
+}
+
+function initWebAuthModal() {
+    const tabLogin = document.getElementById('web-tab-login');
+    const tabRegister = document.getElementById('web-tab-register');
+    const paneLogin = document.getElementById('web-pane-login');
+    const paneRegister = document.getElementById('web-pane-register');
+    const paneOtp = document.getElementById('web-pane-otp');
+    const errorBox = document.getElementById('web-auth-error');
+
+    const emailLoginInput = document.getElementById('web-login-email');
+    const btnLoginSubmit = document.getElementById('web-btn-login-submit');
+
+    const nameRegInput = document.getElementById('web-reg-name');
+    const emailRegInput = document.getElementById('web-reg-email');
+    const termsRegCheckbox = document.getElementById('web-reg-terms');
+    const btnRegisterSubmit = document.getElementById('web-btn-register-submit');
+
+    const otpBoxes = [1, 2, 3, 4, 5, 6].map(i => document.getElementById(`web-otp-${i}`));
+    const btnOtpSubmit = document.getElementById('web-btn-otp-submit');
+    const btnChangeEmail = document.getElementById('web-btn-change-email');
+    const btnResendOtp = document.getElementById('web-btn-resend-otp');
+    const otpHint = document.getElementById('web-otp-hint');
+
+    const btnLogout = document.getElementById('btn-web-logout');
+
+    let activeEmail = '';
+    let activeName = '';
+
+    function showError(msg) {
+        if (errorBox) {
+            errorBox.textContent = msg;
+            errorBox.style.display = 'block';
+        }
+    }
+
+    function clearError() {
+        if (errorBox) errorBox.style.display = 'none';
+    }
+
+    // Tab Switching
+    if (tabLogin && tabRegister) {
+        tabLogin.addEventListener('click', () => {
+            tabLogin.classList.add('active');
+            tabRegister.classList.remove('active');
+            paneLogin.style.display = 'block';
+            paneRegister.style.display = 'none';
+            paneOtp.style.display = 'none';
+            clearError();
+            if (emailRegInput && emailRegInput.value) emailLoginInput.value = emailRegInput.value;
+        });
+
+        tabRegister.addEventListener('click', () => {
+            tabRegister.classList.add('active');
+            tabLogin.classList.remove('active');
+            paneRegister.style.display = 'block';
+            paneLogin.style.display = 'none';
+            paneOtp.style.display = 'none';
+            clearError();
+            if (emailLoginInput && emailLoginInput.value) emailRegInput.value = emailLoginInput.value;
+        });
+    }
+
+    // Login Submit
+    if (btnLoginSubmit) {
+        btnLoginSubmit.addEventListener('click', async () => {
+            const email = emailLoginInput.value.trim();
+            if (!email || !email.includes('@')) {
+                showError('Please enter a valid email address.');
+                return;
+            }
+
+            clearError();
+            btnLoginSubmit.classList.add('loading');
+
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                const data = await resp.json();
+                btnLoginSubmit.classList.remove('loading');
+
+                if (data.status === 'success') {
+                    activeEmail = email;
+                    activeName = '';
+                    transitionToWebOtp();
+                } else {
+                    showError(data.message || 'Failed to send login code.');
+                }
+            } catch (err) {
+                btnLoginSubmit.classList.remove('loading');
+                showError('Server connection error. Please try again.');
+            }
+        });
+    }
+
+    // Register Submit
+    if (btnRegisterSubmit) {
+        btnRegisterSubmit.addEventListener('click', async () => {
+            const name = nameRegInput.value.trim();
+            const email = emailRegInput.value.trim();
+
+            if (!name) {
+                showError('Please enter your full name.');
+                return;
+            }
+            if (!email || !email.includes('@')) {
+                showError('Please enter a valid email address.');
+                return;
+            }
+            if (!termsRegCheckbox.checked) {
+                showError('Please agree to the Terms and Privacy Policy.');
+                return;
+            }
+
+            clearError();
+            btnRegisterSubmit.classList.add('loading');
+
+            try {
+                const resp = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, email })
+                });
+                const data = await resp.json();
+                btnRegisterSubmit.classList.remove('loading');
+
+                if (data.status === 'success') {
+                    activeEmail = email;
+                    activeName = name;
+                    transitionToWebOtp();
+                } else {
+                    showError(data.message || 'Registration failed.');
+                }
+            } catch (err) {
+                btnRegisterSubmit.classList.remove('loading');
+                showError('Server connection error. Please try again.');
+            }
+        });
+    }
+
+    function transitionToWebOtp() {
+        if (paneLogin) paneLogin.style.display = 'none';
+        if (paneRegister) paneRegister.style.display = 'none';
+        if (paneOtp) paneOtp.style.display = 'block';
+        document.getElementById('web-auth-tabs').style.display = 'none';
+        clearError();
+
+        if (otpHint) otpHint.textContent = `Enter the 6-digit code sent to ${activeEmail}`;
+        otpBoxes.forEach(b => { if (b) b.value = ''; });
+        if (otpBoxes[0]) otpBoxes[0].focus();
+    }
+
+    // OTP 6-box input handling
+    otpBoxes.forEach((box, index) => {
+        if (!box) return;
+        box.addEventListener('input', (e) => {
+            const val = e.target.value.replace(/[^0-9]/g, '');
+            box.value = val ? val[0] : '';
+            if (val && index < 5 && otpBoxes[index + 1]) {
+                otpBoxes[index + 1].focus();
+            }
+            const fullCode = otpBoxes.map(b => b.value).join('');
+            if (fullCode.length === 6) {
+                btnOtpSubmit.click();
+            }
+        });
+
+        box.addEventListener('keydown', (e) => {
+            if (e.key === 'Backspace' && !box.value && index > 0 && otpBoxes[index - 1]) {
+                otpBoxes[index - 1].focus();
+            }
+        });
+
+        box.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const pasteData = (e.clipboardData || window.clipboardData).getData('text').trim().replace(/[^0-9]/g, '');
+            if (pasteData.length === 6) {
+                pasteData.split('').forEach((ch, idx) => {
+                    if (otpBoxes[idx]) otpBoxes[idx].value = ch;
+                });
+                btnOtpSubmit.click();
+            }
+        });
+    });
+
+    if (btnChangeEmail) {
+        btnChangeEmail.addEventListener('click', () => {
+            document.getElementById('web-auth-tabs').style.display = 'flex';
+            if (paneOtp) paneOtp.style.display = 'none';
+            if (paneLogin) paneLogin.style.display = 'block';
+            clearError();
+        });
+    }
+
+    if (btnResendOtp) {
+        btnResendOtp.addEventListener('click', async () => {
+            btnResendOtp.disabled = true;
+            btnResendOtp.textContent = 'Sending...';
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: activeEmail })
+                });
+                const data = await resp.json();
+                btnResendOtp.disabled = false;
+                btnResendOtp.textContent = 'Resend Code';
+                if (data.status === 'success') {
+                    showError('New verification code sent to your email.');
+                }
+            } catch {
+                btnResendOtp.disabled = false;
+                btnResendOtp.textContent = 'Resend Code';
+            }
+        });
+    }
+
+    // Verify OTP Submit
+    if (btnOtpSubmit) {
+        btnOtpSubmit.addEventListener('click', async () => {
+            const otp = otpBoxes.map(b => b.value).join('');
+            if (otp.length !== 6) {
+                showError('Please enter all 6 digits.');
+                return;
+            }
+
+            clearError();
+            btnOtpSubmit.classList.add('loading');
+
+            try {
+                const resp = await fetch('/api/auth/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: activeEmail, otp: otp, name: activeName })
+                });
+                const data = await resp.json();
+                btnOtpSubmit.classList.remove('loading');
+
+                if (data.status === 'success') {
+                    setTokens(data.tokens);
+                    onAuthSuccess(data.user);
+                } else {
+                    const container = document.getElementById('web-otp-container');
+                    if (container) {
+                        container.classList.add('error-shake');
+                        setTimeout(() => container.classList.remove('error-shake'), 450);
+                    }
+                    showError(data.message || 'Invalid or expired code.');
+                    otpBoxes.forEach(b => { if (b) b.value = ''; });
+                    if (otpBoxes[0]) otpBoxes[0].focus();
+                }
+            } catch (err) {
+                btnOtpSubmit.classList.remove('loading');
+                showError('Network error verifying code.');
+            }
+        });
+    }
+
+    // Logout
+    if (btnLogout) {
+        btnLogout.addEventListener('click', async () => {
+            const ok = confirm('Log out of AIVA?');
+            if (ok) {
+                try {
+                    await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+                } catch {}
+                localStorage.clear();
+                sessionStorage.clear();
+                showWebAuthModal();
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// 3. Tab Navigation
 // ---------------------------------------------------------------------
 function initNavigation() {
     const navButtons = document.querySelectorAll('.nav-item');
@@ -58,7 +405,7 @@ function initNavigation() {
 }
 
 // ---------------------------------------------------------------------
-// 3. Chat & Command Handling
+// 4. Chat & Command Handling
 // ---------------------------------------------------------------------
 function initChat() {
     const promptInput = document.getElementById('user-prompt-input');
@@ -115,7 +462,6 @@ window.triggerQuickCommand = function(cmd) {
     if (promptInput) {
         promptInput.value = cmd;
     }
-    // Switch to chat view if not already there
     const navChat = document.getElementById('nav-chat');
     if (navChat) navChat.click();
 
@@ -127,16 +473,23 @@ async function sendUserMessage(query) {
     appendChatMessage('user', query);
     setNeuralCoreState('thinking');
 
-    // Create a temporary "AIVA is processing..." bubble
     const tempMsgId = 'temp-' + Date.now();
     appendChatMessage('aiva', '<div class="typing-dots"><span></span><span></span><span></span></div>', tempMsgId);
 
     try {
         const response = await fetch('/api/chat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({ message: query })
         });
+
+        if (response.status === 401) {
+            removeTempMessage(tempMsgId);
+            appendChatMessage('aiva', '🔒 Authentication required. Please log in to command AIVA.');
+            setNeuralCoreState('idle');
+            showWebAuthModal();
+            return;
+        }
 
         const data = await response.json();
         removeTempMessage(tempMsgId);
@@ -146,12 +499,10 @@ async function sendUserMessage(query) {
             appendChatMessage('aiva', reply, null, data.route);
             setNeuralCoreState('speaking');
 
-            // Render DAG node if workflow info was returned
             if (data.route) {
                 updateWorkflowVisualizer(query, data.route, reply);
             }
 
-            // If a screen inspection or image was involved, update vision preview
             if (data.screenshot_base64) {
                 updateVisionSnapshot(data.screenshot_base64);
             }
@@ -164,7 +515,7 @@ async function sendUserMessage(query) {
     } catch (err) {
         console.error('Chat error:', err);
         removeTempMessage(tempMsgId);
-        appendChatMessage('aiva', `⚠️ Network error: Could not reach AIVA server. Check if server is running.`);
+        appendChatMessage('aiva', `⚠️ Network error: Could not reach AIVA server.`);
         setNeuralCoreState('idle');
     }
 }
@@ -211,13 +562,12 @@ function removeTempMessage(id) {
 function setNeuralCoreState(state) {
     const core = document.getElementById('neural-core');
     if (!core) return;
-
     core.classList.remove('thinking', 'speaking', 'idle');
     core.classList.add(state);
 }
 
 // ---------------------------------------------------------------------
-// 4. Web Speech API (In-Browser Mic)
+// 5. Web Speech API (In-Browser Mic)
 // ---------------------------------------------------------------------
 function initSpeechRecognition() {
     const micBtn = document.getElementById('btn-mic-input');
@@ -225,9 +575,7 @@ function initSpeechRecognition() {
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-        if (micBtn) {
-            micBtn.title = "Speech recognition not supported in this browser.";
-        }
+        if (micBtn) micBtn.title = "Speech recognition not supported in this browser.";
         return;
     }
 
@@ -262,9 +610,7 @@ function initSpeechRecognition() {
             .map(result => result.transcript)
             .join('');
 
-        if (promptInput) {
-            promptInput.value = transcript;
-        }
+        if (promptInput) promptInput.value = transcript;
 
         if (event.results[0].isFinal) {
             micBtn.classList.remove('listening');
@@ -288,7 +634,7 @@ function initSpeechRecognition() {
 }
 
 // ---------------------------------------------------------------------
-// 5. Voice Mode Toggles — wired to /api/voice/control backend
+// 6. Voice Mode Toggles
 // ---------------------------------------------------------------------
 function initVoiceModeControls() {
     const btnAdaptive = document.getElementById('btn-mode-adaptive');
@@ -296,8 +642,6 @@ function initVoiceModeControls() {
     const btnAll      = document.getElementById('btn-mode-allvoice');
     const btnToggle   = document.getElementById('btn-toggle-voice');
 
-    // Fetch once on load, then only on button interactions + slow 30s heartbeat
-    // (no aggressive 2s polling — that spams the server with requests)
     syncVoiceStatus();
     setInterval(syncVoiceStatus, 30000);
 
@@ -314,8 +658,6 @@ function initVoiceModeControls() {
             if (ok) {
                 setActiveModeButton(btnAdaptive);
                 if (btnToggle) btnToggle.classList.remove('muted');
-                const label = document.getElementById('voice-btn-label');
-                if (label) label.textContent = 'Voice Active';
                 syncVoiceStatus();
             }
         });
@@ -327,8 +669,6 @@ function initVoiceModeControls() {
             if (ok) {
                 setActiveModeButton(btnWake);
                 if (btnToggle) btnToggle.classList.remove('muted');
-                const label = document.getElementById('voice-btn-label');
-                if (label) label.textContent = 'Voice Active';
                 syncVoiceStatus();
             }
         });
@@ -340,8 +680,6 @@ function initVoiceModeControls() {
             if (ok) {
                 setActiveModeButton(btnAll);
                 if (btnToggle) btnToggle.classList.remove('muted');
-                const label = document.getElementById('voice-btn-label');
-                if (label) label.textContent = 'Voice Active';
                 syncVoiceStatus();
             }
         });
@@ -350,24 +688,16 @@ function initVoiceModeControls() {
     if (btnToggle) {
         btnToggle.addEventListener('click', async () => {
             const isMuted = btnToggle.classList.contains('muted');
-            const label = document.getElementById('voice-btn-label');
-
             if (isMuted) {
-                let targetAction = 'start_adaptive';
-                if (btnWake && btnWake.classList.contains('active')) targetAction = 'start_wakeword';
-                if (btnAll && btnAll.classList.contains('active')) targetAction = 'start_allvoice';
-
-                const ok = await sendVoiceControl(targetAction);
+                const ok = await sendVoiceControl('start_adaptive');
                 if (ok) {
                     btnToggle.classList.remove('muted');
-                    if (label) label.textContent = 'Voice Active';
                     syncVoiceStatus();
                 }
             } else {
                 const ok = await sendVoiceControl('stop');
                 if (ok) {
                     btnToggle.classList.add('muted');
-                    if (label) label.textContent = 'Voice Muted';
                     const voiceBadge = document.getElementById('voice-indicator-badge');
                     if (voiceBadge) {
                         voiceBadge.textContent = 'MUTED';
@@ -383,18 +713,12 @@ async function sendVoiceControl(action) {
     try {
         const resp = await fetch('/api/voice/control', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({ action })
         });
         const data = await resp.json();
-        if (data.status === 'error') {
-            console.warn('[VoiceControl] Server error:', data.message);
-            return false;
-        }
-        console.log(`[VoiceControl] action=${action} → mode=${data.mode}`);
-        return true;
-    } catch (e) {
-        console.warn('[VoiceControl] Network error:', e);
+        return data.status !== 'error';
+    } catch {
         return false;
     }
 }
@@ -404,71 +728,25 @@ async function syncVoiceStatus() {
         const resp = await fetch('/api/voice/status');
         if (!resp.ok) return;
         const data = await resp.json();
-        const voiceBadge  = document.getElementById('voice-indicator-badge');
-        const btnToggle   = document.getElementById('btn-toggle-voice');
-        const btnAdaptive = document.getElementById('btn-mode-adaptive');
-        const btnWake     = document.getElementById('btn-mode-wakeword');
-        const btnAll      = document.getElementById('btn-mode-allvoice');
-        const label       = document.getElementById('voice-btn-label');
+        const voiceBadge = document.getElementById('voice-indicator-badge');
+        const btnToggle  = document.getElementById('btn-toggle-voice');
 
         if (!data.running) {
             if (voiceBadge) { voiceBadge.textContent = 'MUTED'; voiceBadge.className = 'badge-mini idle'; }
             if (btnToggle) btnToggle.classList.add('muted');
-            if (label) label.textContent = 'Voice Muted';
             return;
         }
 
         if (btnToggle) btnToggle.classList.remove('muted');
-        if (label) label.textContent = 'Voice Active';
-
-        // Update active mode button styling
-        if (data.mode === 'allvoice') {
-            if (btnAll) btnAll.classList.add('active');
-            if (btnWake) btnWake.classList.remove('active');
-            if (btnAdaptive) btnAdaptive.classList.remove('active');
-        } else if (data.mode === 'wakeword') {
-            if (btnWake) btnWake.classList.add('active');
-            if (btnAll) btnAll.classList.remove('active');
-            if (btnAdaptive) btnAdaptive.classList.remove('active');
-        } else {
-            if (btnAdaptive) btnAdaptive.classList.add('active');
-            if (btnWake) btnWake.classList.remove('active');
-            if (btnAll) btnAll.classList.remove('active');
-        }
-
-        // Update live runtime state badge
-        if (!voiceBadge) return;
-
-        const state = data.state || 'standby';
-        if (state === 'follow_up') {
-            voiceBadge.textContent = 'FOLLOW-UP';
-            voiceBadge.className = 'badge-mini followup';
-            setNeuralCoreState('speaking');
-        } else if (state === 'listening') {
-            voiceBadge.textContent = 'LISTENING';
-            voiceBadge.className = 'badge-mini listening';
-            setNeuralCoreState('thinking');
-        } else if (state === 'processing') {
-            voiceBadge.textContent = 'THINKING';
-            voiceBadge.className = 'badge-mini thinking';
-            setNeuralCoreState('thinking');
-        } else if (state === 'speaking') {
-            voiceBadge.textContent = 'SPEAKING';
-            voiceBadge.className = 'badge-mini active';
-            setNeuralCoreState('speaking');
-        } else {
-            // Standby
+        if (voiceBadge) {
             voiceBadge.textContent = (data.mode || 'ADAPTIVE').toUpperCase();
             voiceBadge.className = 'badge-mini active';
         }
-    } catch (e) {
-        // quiet — server may not be running in dev mode
-    }
+    } catch {}
 }
 
-
 // ---------------------------------------------------------------------
-// 6. Dynamic DAG Workflows Visualizer
+// 7. Dynamic DAG Workflows Visualizer
 // ---------------------------------------------------------------------
 function updateWorkflowVisualizer(query, route, resultSummary) {
     const treeDisplay = document.getElementById('workflow-tree-display');
@@ -496,38 +774,62 @@ function updateWorkflowVisualizer(query, route, resultSummary) {
 }
 
 // ---------------------------------------------------------------------
-// 7. Memory & Patterns Loader
+// 8. Conversation History Loader
+// ---------------------------------------------------------------------
+async function loadConversationHistory() {
+    try {
+        const resp = await fetch('/api/history', { headers: authHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const turns = data.history || [];
+        if (turns.length === 0) return;
+
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        container.innerHTML = '';
+        turns.forEach(t => {
+            appendChatMessage(t.role, t.message, null, t.route);
+        });
+    } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 9. Memory & Patterns Loader (Per Authenticated User)
 // ---------------------------------------------------------------------
 async function loadMemoryData() {
     try {
-        const resp = await fetch('/api/memory');
+        const resp = await fetch('/api/memory', { headers: authHeaders() });
         if (!resp.ok) return;
         const data = await resp.json();
 
         // 1. Render User Memory
         const userFactsContainer = document.getElementById('user-facts-list');
         const userNameDisplay = document.getElementById('user-display-name');
-        const factNameVal = document.getElementById('fact-name-val');
 
         if (data.user_memory) {
             const u = data.user_memory;
-            if (u.name) {
-                if (userNameDisplay) userNameDisplay.textContent = u.name;
-                if (factNameVal) factNameVal.textContent = u.name;
+            if (u.name && userNameDisplay) {
+                userNameDisplay.textContent = u.name;
             }
 
             if (userFactsContainer) {
                 userFactsContainer.innerHTML = '';
-                for (const [k, v] of Object.entries(u)) {
-                    const card = document.createElement('div');
-                    card.className = 'memory-entry glass-card';
-                    card.innerHTML = `<strong>${formatKey(k)}</strong><p>${JSON.stringify(v)}</p>`;
-                    userFactsContainer.appendChild(card);
+                const entries = Object.entries(u);
+                if (entries.length === 0) {
+                    userFactsContainer.innerHTML = '<div style="color:var(--text-tertiary); font-size:12px; padding:12px;">No stored facts for this account.</div>';
+                } else {
+                    for (const [k, v] of entries) {
+                        const card = document.createElement('div');
+                        card.className = 'memory-entry glass-card';
+                        card.innerHTML = `<strong>${formatKey(k)}</strong><p>${JSON.stringify(v)}</p>`;
+                        userFactsContainer.appendChild(card);
+                    }
                 }
             }
         }
 
-        // 2. Render Task Patterns (Recipes)
+        // 2. Render Task Patterns
         const recipesContainer = document.getElementById('task-recipes-list');
         const patternCountEl = document.getElementById('stat-patterns-count');
 
@@ -560,9 +862,6 @@ function formatKey(k) {
     return k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
-// ---------------------------------------------------------------------
-// 8. Vision Snapshot Preview
-// ---------------------------------------------------------------------
 function updateVisionSnapshot(base64Data) {
     const holder = document.getElementById('screen-preview-holder');
     if (holder) {
@@ -570,9 +869,6 @@ function updateVisionSnapshot(base64Data) {
     }
 }
 
-// ---------------------------------------------------------------------
-// 9. System Status Polling
-// ---------------------------------------------------------------------
 async function pollSystemStatus() {
     try {
         const resp = await fetch('/api/status');
@@ -583,7 +879,5 @@ async function pollSystemStatus() {
                 apiLabel.textContent = `Pools: ${data.key_count} Keys Active`;
             }
         }
-    } catch (e) {
-        // quiet
-    }
+    } catch {}
 }

@@ -8,6 +8,7 @@ class DeviceActionExecutor {
   constructor(permissionsManager, getMainWindow) {
     this.perms = permissionsManager;
     this.getMainWindow = getMainWindow;
+    this.isPaused = false;
 
     // Strict allowlist of applications to prevent arbitrary command execution
     this.allowedApps = {
@@ -43,6 +44,16 @@ class DeviceActionExecutor {
   }
 
   async execute(action, params = {}) {
+    if (this.isPaused) {
+      return {
+        status: 'denied',
+        output: {
+          error: 'control_paused',
+          message: 'Device control is paused by user from the system tray.'
+        }
+      };
+    }
+
     // 1. Permission check
     if (!this.perms.isPermitted(action)) {
       return {

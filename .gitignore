@@ -7,7 +7,9 @@ config/secrets.json
 *.key
 *.pem
 *.db
+*.bak
 storage/*.db
+storage/*.bak
 storage/downloads/
 *.exe
 

@@ -5,14 +5,33 @@ import time
 import urllib.parse
 from core.shared.config_loader import get_path
 from core.shared.logger import get_logger
+from services.database_service import DatabaseService
 
 logger = get_logger("TaskPatternService")
 
 
 class TaskPatternService:
-    def __init__(self, memory_file: str = "memory/task_patterns.json"):
+    def __init__(self, memory_file: str = "memory/task_patterns.json", db: DatabaseService = None):
         self.memory_file = memory_file
-        self.patterns = self._load_patterns()
+        self.db = db or DatabaseService()
+        self.active_user_id = None
+        self._patterns_cache = self._load_patterns()
+
+    @property
+    def patterns(self) -> dict:
+        uid = self.active_user_id
+        if not uid:
+            primary = self.db.get_primary_user()
+            uid = primary["id"] if primary else None
+        if uid:
+            db_pats = self.db.get_user_task_patterns(uid)
+            if db_pats:
+                return db_pats
+        return self._patterns_cache
+
+    @patterns.setter
+    def patterns(self, val):
+        self._patterns_cache = val
 
     def _load_patterns(self) -> dict:
         """Load learned task patterns from disk."""
@@ -26,13 +45,14 @@ class TaskPatternService:
             return {}
 
     def _save_patterns(self):
-        """Save task patterns to disk."""
-        os.makedirs(os.path.dirname(self.memory_file) or ".", exist_ok=True)
-        try:
-            with open(self.memory_file, "w", encoding="utf-8") as f:
-                json.dump(self.patterns, f, indent=4)
-        except Exception as e:
-            logger.error(f"Failed to save task patterns: {e}")
+        """Save task patterns to disk and DB."""
+        uid = self.active_user_id
+        if not uid:
+            primary = self.db.get_primary_user()
+            uid = primary["id"] if primary else None
+        if uid:
+            for k, v in self.patterns.items():
+                self.db.set_user_task_pattern(uid, k, v)
 
     def learn_pattern(self, goal: str, workflow_data) -> str:
         """Analyzes a successful goal and workflow, extracts generalized templates, and stores the pattern."""
