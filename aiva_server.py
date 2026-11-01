@@ -370,8 +370,11 @@ def start_kernel_background():
     asyncio.set_event_loop(kernel_loop)
     kernel = AIVAKernel()
     kernel_loop.run_until_complete(kernel.start_server())
-    # Start the adaptive voice runtime by default (listens on mic, dynamic follow-up)
-    kernel.start_voice_mode(mode="adaptive")
+    # Start the adaptive voice runtime (listens on mic if available, harmlessly skips if headless)
+    try:
+        kernel.start_voice_mode(mode="adaptive")
+    except Exception as e:
+        print(f"[Warning] Headless server - voice mode not started: {e}")
     kernel_loop.run_forever()
 
 

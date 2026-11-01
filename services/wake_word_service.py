@@ -3,7 +3,10 @@ import time
 import asyncio
 import threading
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    sd = None
 import speech_recognition as sr
 from core.shared.logger import get_logger
 
