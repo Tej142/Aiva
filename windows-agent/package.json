@@ -1,0 +1,45 @@
+{
+  "name": "aiva-device-agent",
+  "version": "1.0.0",
+  "description": "AIVA Windows Companion Device Agent",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win nsis",
+    "pack": "electron-builder --dir"
+  },
+  "author": "AIVA",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.aiva.deviceagent",
+    "productName": "AIVA Device Agent",
+    "directories": {
+      "output": "dist"
+    },
+    "forceCodeSigning": false,
+    "win": {
+      "sign": null,
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AIVA Device Agent"
+    }
+  }
+}

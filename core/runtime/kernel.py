@@ -111,6 +111,15 @@ class AIVAKernel:
 
         self.capabilities = CapabilityRegistry()
 
+        from services.database_service import DatabaseService
+        from services.device_manager import DeviceManager
+        from services.device_channel import DeviceChannel
+
+        self.db = DatabaseService()
+        self.device_manager = DeviceManager(self.db)
+        self.device_channel = DeviceChannel(self.db, self.device_manager)
+        self.active_user_id = None
+
 
         # =====================================
         # CORE SERVICES
@@ -567,10 +576,40 @@ class AIVAKernel:
         self.workflow_engine.outcome_reporter = self.outcome_reporter
 
         from tools.app_launcher import open_application
+        import platform
+
+        def _get_active_uid(action_dict):
+            uid = action_dict.get("user_id") or getattr(self, "active_user_id", None)
+            if not uid:
+                primary = self.db.get_primary_user()
+                if primary:
+                    uid = primary["id"]
+            return uid
+
+        async def open_url_action(action):
+            uid = _get_active_uid(action)
+            params = action.get("parameters", {})
+            url = params.get("url") or action.get("url") or action.get("query") or ""
+            target_dev = action.get("device_name") or params.get("device_name")
+
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="open_url",
+                    params={"url": url},
+                    target_device_name=target_dev
+                )
+
+            if platform.system() != "Windows":
+                msg = "No Windows device is currently online to open this URL. Please open your AIVA Device Agent on your computer."
+                print(f"[DeviceChannel] {msg}")
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
+            return await self.browser_service.open_url_action(action)
 
         self.capabilities.register(
             "open_url",
-            self.browser_service.open_url_action
+            open_url_action
         )
 
         self.capabilities.register(
@@ -592,7 +631,23 @@ class AIVAKernel:
         self.capabilities.register("create_document", create_document_action)
 
         async def launch_app_action(action):
+            uid = _get_active_uid(action)
             app_name = action.get("app_name") or action.get("parameters", {}).get("app_name", "")
+            target_dev = action.get("device_name") or action.get("parameters", {}).get("device_name")
+
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="open_app",
+                    params={"app_name": app_name},
+                    target_device_name=target_dev
+                )
+
+            if platform.system() != "Windows":
+                msg = f"No Windows device is online to launch '{app_name}'. Please connect your AIVA Device Agent."
+                print(f"[DeviceChannel] {msg}")
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
             result_str = open_application(app_name)
             print(f"[AppLauncher] {result_str}")
             return {"status": "success", "result": result_str}
@@ -605,8 +660,23 @@ class AIVAKernel:
         from tools import system_controller
 
         async def adjust_volume_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
             act = params.get("action", action.get("action"))
+
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                act_name = "volume_mute" if act == "mute" else "volume_set"
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action=act_name,
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+
+            if platform.system() != "Windows":
+                msg = "No Windows device is online to adjust volume. Please connect your AIVA Device Agent."
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
             if act == "mute":
                 res = system_controller.toggle_mute()
             elif "level" in params:
@@ -616,24 +686,82 @@ class AIVAKernel:
             print(f"[SystemController] {res}")
             return {"status": "success", "result": res}
 
+        self.capabilities.register("adjust_volume", adjust_volume_action)
+
         async def media_control_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
             media_action = params.get("media_action", action.get("media_action", "play_pause"))
+
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action=f"media_{media_action}",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+
+            if platform.system() != "Windows":
+                msg = "No Windows device is online for media control. Please connect your AIVA Device Agent."
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
             res = system_controller.media_control(media_action)
             print(f"[SystemController] {res}")
             return {"status": "success", "result": res}
 
+        self.capabilities.register("media_control", media_control_action)
+
         async def take_screenshot_action(action):
+            uid = _get_active_uid(action)
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                res = await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="screenshot",
+                    params={},
+                    target_device_name=action.get("device_name")
+                )
+                if res.get("status") == "success" and "screenshot_base64" in res.get("output", {}):
+                    import base64
+                    raw_data = base64.b64decode(res["output"]["screenshot_base64"])
+                    from core.shared.config_loader import ensure_dir
+                    sc_dir = ensure_dir("storage")
+                    sc_path = os.path.join(sc_dir, "last_screenshot.png")
+                    with open(sc_path, "wb") as f:
+                        f.write(raw_data)
+                return res
+
+            if platform.system() != "Windows":
+                msg = "No Windows device is online to capture screenshot. Please connect your AIVA Device Agent."
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
             res = system_controller.take_screenshot()
             print(f"[SystemController] {res}")
             return {"status": "success", "result": res}
 
+        self.capabilities.register("take_screenshot", take_screenshot_action)
+
         async def system_power_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
             p_action = params.get("power_action", action.get("power_action", "lock"))
+
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="lock_screen" if p_action == "lock" else p_action,
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+
+            if platform.system() != "Windows":
+                msg = "No Windows device is online. Please connect your AIVA Device Agent."
+                return {"status": "offline", "error": "device_offline", "result": msg, "message": msg}
+
             res = system_controller.system_power(p_action)
             print(f"[SystemController] {res}")
             return {"status": "success", "result": res}
+
+        self.capabilities.register("system_power", system_power_action)
 
         async def speak_action(action):
             params = action.get("parameters", {})
@@ -654,7 +782,15 @@ class AIVAKernel:
             return res
 
         async def type_text_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="type_text",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
             text = params.get("text") or action.get("text", "")
             instant = params.get("instant_paste", True)
             res = ui_controller.type_text(text, instant_paste=instant)
@@ -662,7 +798,15 @@ class AIVAKernel:
             return res
 
         async def press_key_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="press_key",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
             key = params.get("key") or action.get("key", "enter")
             count = params.get("count", 1)
             res = ui_controller.press_key(key, count=count)
@@ -670,13 +814,64 @@ class AIVAKernel:
             return res
 
         async def hotkey_action(action):
+            uid = _get_active_uid(action)
             params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="hotkey",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
             keys = params.get("keys") or action.get("keys", [])
             if isinstance(keys, str):
                 keys = [k.strip() for k in keys.split("+")]
             res = ui_controller.hotkey(*keys)
             print(f"[UIController] {res.get('message', res)}")
             return res
+
+        async def open_file_action(action):
+            uid = _get_active_uid(action)
+            params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="open_file",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+            return {"status": "offline", "error": "device_offline", "result": "No Windows device is online."}
+
+        async def list_running_apps_action(action):
+            uid = _get_active_uid(action)
+            params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="list_running_apps",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+            return {"status": "offline", "error": "device_offline", "result": "No Windows device is online."}
+
+        async def close_app_action(action):
+            uid = _get_active_uid(action)
+            params = action.get("parameters", {})
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                return await self.device_channel.dispatch_command(
+                    user_id=uid,
+                    action="close_app",
+                    params=params,
+                    target_device_name=action.get("device_name")
+                )
+            return {"status": "offline", "error": "device_offline", "result": "No Windows device is online."}
+
+        self.capabilities.register("type_text", type_text_action)
+        self.capabilities.register("press_key", press_key_action)
+        self.capabilities.register("hotkey", hotkey_action)
+        self.capabilities.register("open_file", open_file_action)
+        self.capabilities.register("list_running_apps", list_running_apps_action)
+        self.capabilities.register("close_app", close_app_action)
 
         async def wait_action(action):
             params = action.get("parameters", {})

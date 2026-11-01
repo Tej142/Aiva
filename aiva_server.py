@@ -12,11 +12,59 @@ if sys.platform == "win32":
 
 import os
 import json
-from flask import Flask, request, jsonify, send_from_directory
+from functools import wraps
+from flask import Flask, request, jsonify, send_from_directory, make_response, send_file, redirect
+from flask_cors import CORS
+from flask_sock import Sock
+
 from core.runtime.kernel import AIVAKernel
+from services.database_service import DatabaseService
+from services.auth_service import AuthService
+from services.device_manager import DeviceManager
+from services.device_channel import DeviceChannel
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 app = Flask(__name__, static_folder=UI_DIR)
+CORS(app, supports_credentials=True)
+sock = Sock(app)
+
+# =====================================================================
+# DATABASE, AUTH & DEVICE SERVICES
+# =====================================================================
+db = DatabaseService()
+auth_service = AuthService(db)
+device_manager = DeviceManager(db)
+device_channel = DeviceChannel(db, device_manager)
+
+
+def get_authenticated_user():
+    """Extract and verify user from Bearer header or cookie."""
+    auth_header = request.headers.get("Authorization", "")
+    token = None
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "aiva_access_token" in request.cookies:
+        token = request.cookies.get("aiva_access_token")
+
+    if not token:
+        return None
+
+    payload = auth_service.verify_access_token(token)
+    if not payload:
+        return None
+
+    user_id = payload.get("sub")
+    return db.get_user_by_id(user_id) if user_id else None
+
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user = get_authenticated_user()
+        if not user:
+            return jsonify({"status": "error", "message": "Authentication required. Please log in."}), 401
+        return f(user, *args, **kwargs)
+    return decorated
 
 # =====================================================================
 # GLOBAL KERNEL & ASYNC THREAD RUNNER
@@ -92,6 +140,34 @@ def static_files(filename):
 
 
 # =====================================================================
+# WINDOWS COMPANION APP INSTALLER DOWNLOAD
+# =====================================================================
+@app.route("/download/windows-agent", methods=["GET"])
+@app.route("/download/agent", methods=["GET"])
+def download_windows_agent():
+    """
+    Serves the Windows Device Agent installer (.exe) directly from the server,
+    or falls back to the latest GitHub Release asset.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "storage", "downloads", "AIVA-Device-Agent-Setup-1.0.0.exe"),
+        os.path.join(base_dir, "windows-agent", "dist", "AIVA Device Agent Setup 1.0.0.exe")
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return send_file(
+                path,
+                as_attachment=True,
+                download_name="AIVA-Device-Agent-Setup-1.0.0.exe",
+                mimetype="application/vnd.microsoft.portable-executable"
+            )
+
+    # Fallback: Redirect to GitHub Releases download URL
+    return redirect("https://github.com/Tej142/Aiva/releases/latest/download/AIVA-Device-Agent-Setup-1.0.0.exe")
+
+
+# =====================================================================
 # REST APIS FOR WEB UI HUD & CONTROLS
 # =====================================================================
 @app.route("/api/chat", methods=["POST"])
@@ -103,7 +179,17 @@ def api_chat():
     if not msg:
         return jsonify({"status": "error", "error": "Missing message"}), 400
 
-    print(f"\n[Web UI Chat Query]: {msg}")
+    # User identification: from JWT bearer token / cookie or fallback to primary user
+    auth_user = get_authenticated_user()
+    if auth_user and kernel:
+        kernel.active_user_id = auth_user["id"]
+    elif kernel and not kernel.active_user_id:
+        primary = db.get_primary_user()
+        if primary:
+            kernel.active_user_id = primary["id"]
+
+    uid_log = kernel.active_user_id if kernel else "none"
+    print(f"\n[Web UI Chat Query]: {msg} (User: {uid_log})")
     try:
         # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
         result = run_async(kernel.input_handler.process_query(msg, speak=True))
@@ -132,9 +218,11 @@ def api_chat():
 @app.route("/api/status", methods=["GET"])
 def api_status():
     """System health, key pool count, and kernel status."""
+    online_count = len(device_channel._connections) if device_channel else 0
     return jsonify({
         "status": "online",
         "kernel_running": kernel is not None and kernel.running,
+        "devices_online": online_count,
         "key_count": 17,
         "pools": {
             "groq": 7,
@@ -143,6 +231,228 @@ def api_status():
         },
         "voice_engine": "Microsoft Edge Neural (en-IN-PrabhatNeural)"
     })
+
+
+# =====================================================================
+# AUTHENTICATION REST APIS (Brevo Transactional Email OTP)
+# =====================================================================
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    data = request.json or {}
+    email = data.get("email", "").strip()
+    if not email:
+        return jsonify({"status": "error", "message": "Email address is required."}), 400
+
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    success, msg = auth_service.request_otp(email, ip_address=ip)
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 400
+
+    return jsonify({"status": "success", "message": msg})
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.json or {}
+    email = data.get("email", "").strip()
+    if not email:
+        return jsonify({"status": "error", "message": "Email address is required."}), 400
+
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    success, msg = auth_service.request_otp(email, ip_address=ip)
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 400
+
+    return jsonify({"status": "success", "message": msg})
+
+
+@app.route("/api/auth/verify-otp", methods=["POST"])
+def auth_verify_otp():
+    data = request.json or {}
+    email = data.get("email", "").strip()
+    otp = str(data.get("otp", "")).strip()
+
+    if not email or not otp:
+        return jsonify({"status": "error", "message": "Email and 6-digit OTP code are required."}), 400
+
+    success, msg, result = auth_service.verify_otp(email, otp)
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 400
+
+    response = make_response(jsonify({
+        "status": "success",
+        "message": msg,
+        "user": result["user"],
+        "tokens": result["tokens"]
+    }))
+
+    # Set cookie for shared browser/Electron session
+    response.set_cookie(
+        "aiva_access_token",
+        result["tokens"]["access_token"],
+        max_age=result["tokens"]["expires_in"],
+        httponly=False,
+        samesite="Lax"
+    )
+    return response
+
+
+@app.route("/api/auth/refresh", methods=["POST"])
+def auth_refresh():
+    data = request.json or {}
+    refresh_token = data.get("refresh_token") or request.cookies.get("aiva_refresh_token")
+
+    if not refresh_token:
+        return jsonify({"status": "error", "message": "Refresh token is required."}), 400
+
+    success, msg, tokens = auth_service.refresh_access_token(refresh_token)
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 401
+
+    response = make_response(jsonify({
+        "status": "success",
+        "message": msg,
+        "tokens": tokens
+    }))
+    response.set_cookie(
+        "aiva_access_token",
+        tokens["access_token"],
+        max_age=tokens["expires_in"],
+        httponly=False,
+        samesite="Lax"
+    )
+    return response
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    data = request.json or {}
+    refresh_token = data.get("refresh_token")
+    if refresh_token:
+        auth_service.revoke_refresh_token(refresh_token)
+
+    response = make_response(jsonify({"status": "success", "message": "Logged out successfully."}))
+    response.delete_cookie("aiva_access_token")
+    return response
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@require_auth
+def auth_me(user):
+    devices = device_manager.list_devices(user["id"])
+    with device_channel._channel_lock:
+        online_ids = set(device_channel._connections.keys())
+
+    for dev in devices:
+        dev["is_online"] = dev["id"] in online_ids
+
+    return jsonify({
+        "status": "success",
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "created_at": user["created_at"]
+        },
+        "devices": devices
+    })
+
+
+# =====================================================================
+# DEVICE REGISTRY REST APIS
+# =====================================================================
+@app.route("/api/devices", methods=["GET"])
+@require_auth
+def get_devices(user):
+    devices = device_manager.list_devices(user["id"])
+    with device_channel._channel_lock:
+        online_ids = set(device_channel._connections.keys())
+
+    for dev in devices:
+        dev["is_online"] = dev["id"] in online_ids
+
+    return jsonify({"status": "success", "devices": devices})
+
+
+@app.route("/api/devices/register", methods=["POST"])
+@require_auth
+def register_device(user):
+    data = request.json or {}
+    name = data.get("name") or "Windows PC"
+    platform_str = data.get("platform") or "windows"
+    app_version = data.get("app_version") or "1.0.0"
+
+    success, msg, result = device_manager.register_device(
+        user_id=user["id"],
+        name=name,
+        platform=platform_str,
+        app_version=app_version
+    )
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 400
+
+    return jsonify({
+        "status": "success",
+        "message": msg,
+        "device": result["device"],
+        "device_token": result["device_token"]
+    }), 201
+
+
+@app.route("/api/devices/<device_id>", methods=["PATCH"])
+@require_auth
+def rename_device(user, device_id):
+    data = request.json or {}
+    new_name = data.get("name", "").strip()
+    if not new_name:
+        return jsonify({"status": "error", "message": "Device name is required."}), 400
+
+    success, msg = device_manager.rename_device(device_id=device_id, user_id=user["id"], new_name=new_name)
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 404
+
+    return jsonify({"status": "success", "message": msg})
+
+
+@app.route("/api/devices/<device_id>", methods=["DELETE"])
+@require_auth
+def revoke_device(user, device_id):
+    # Terminate active socket connection if open
+    with device_channel._channel_lock:
+        ws = device_channel._connections.get(device_id)
+        if ws:
+            try:
+                ws.send(json.dumps({
+                    "v": 1,
+                    "type": "revoked",
+                    "message": "Device token has been revoked by user."
+                }))
+                ws.close(reason="Device revoked")
+            except Exception:
+                pass
+            device_channel._connections.pop(device_id, None)
+            device_channel._device_user_map.pop(device_id, None)
+
+    success, msg = device_manager.revoke_device(device_id=device_id, user_id=user["id"])
+    if not success:
+        return jsonify({"status": "error", "message": msg}), 404
+
+    return jsonify({"status": "success", "message": msg})
+
+
+@app.route("/api/devices/audit-logs", methods=["GET"])
+@require_auth
+def get_audit_logs(user):
+    limit = request.args.get("limit", 50, type=int)
+    logs = db.get_recent_audit_logs(user["id"], limit=limit)
+    return jsonify({"status": "success", "audit_logs": logs})
+
+
+# =====================================================================
+# REAL-TIME SECURE WEBSOCKET ENDPOINT (/ws/device)
+# =====================================================================
+@sock.route("/ws/device")
+def ws_device_endpoint(ws):
+    device_channel.handle_ws_connection(ws, request.environ)
 
 
 @app.route("/api/memory", methods=["GET"])
@@ -312,6 +622,12 @@ def alexa_webhook():
         print(f"[Alexa Prompt]: '{query}'")
 
         try:
+            # Bind user context to kernel if available
+            if kernel and not kernel.active_user_id:
+                primary = db.get_primary_user()
+                if primary:
+                    kernel.active_user_id = primary["id"]
+
             # Process query through AIVA without PC TTS (since Echo will speak the response)
             result = run_async(kernel.input_handler.process_query(query, speak=False))
             response_text = result.get("response", "Command executed.")
@@ -343,7 +659,15 @@ def direct_command():
     if not msg:
         return jsonify({"status": "error", "message": "Missing 'message' field"}), 400
 
-    print(f"\n[HTTP Command]: {msg}")
+    auth_user = get_authenticated_user()
+    if auth_user and kernel:
+        kernel.active_user_id = auth_user["id"]
+    elif kernel and not kernel.active_user_id:
+        primary = db.get_primary_user()
+        if primary:
+            kernel.active_user_id = primary["id"]
+
+    print(f"\n[HTTP Command]: {msg} (User: {getattr(kernel, 'active_user_id', 'none')})")
     try:
         result = run_async(kernel.input_handler.process_query(msg, speak=True))
         return jsonify({
@@ -358,7 +682,11 @@ def direct_command():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "healthy", "kernel_active": kernel is not None and kernel.running})
+    return jsonify({
+        "status": "healthy",
+        "kernel_active": kernel is not None and kernel.running,
+        "devices_online": len(device_channel._connections) if device_channel else 0
+    })
 
 
 # =====================================================================
@@ -369,6 +697,13 @@ def start_kernel_background():
     kernel_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(kernel_loop)
     kernel = AIVAKernel()
+    device_channel.set_event_loop(kernel_loop)
+
+    # Attach primary user if available
+    primary = db.get_primary_user()
+    if primary:
+        kernel.active_user_id = primary["id"]
+
     kernel_loop.run_until_complete(kernel.start_server())
     # Start the adaptive voice runtime (listens on mic if available, harmlessly skips if headless)
     try:

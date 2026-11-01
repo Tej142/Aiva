@@ -448,6 +448,7 @@ body::before {
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
+    text-decoration: none;
     transition: all 0.15s;
     white-space: nowrap;
 }
@@ -456,6 +457,21 @@ body::before {
     color: var(--text-1);
     border-color: var(--border-default);
     background: var(--bg-hover);
+}
+
+.hud-btn-download {
+    text-decoration: none;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(2, 132, 199, 0.25));
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+    font-weight: 600;
+}
+
+.hud-btn-download:hover {
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.3), rgba(2, 132, 199, 0.4));
+    border-color: #38bdf8;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
 }
 
 .api-health-pill {

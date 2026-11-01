@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AIVA Device Agent — Login</title>
+  <link rel="stylesheet" href="renderer.css">
+</head>
+<body>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="brand">
+      <div class="brand-icon">A</div>
+      <div class="brand-title">AIVA Device Agent</div>
+    </div>
+    <div class="top-bar-controls">
+      <div class="status-pill">
+        <span class="status-dot disconnected"></span>
+        <span id="nav-status-text">Not Registered</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="auth-wrapper">
+    <div class="auth-card">
+
+      <div class="auth-header">
+        <div style="font-size: 32px; margin-bottom: 8px;">🔐</div>
+        <h1>Device Pairing</h1>
+        <p>Authenticate your Windows computer with your Cloud AIVA server.</p>
+      </div>
+
+      <div id="auth-msg" class="auth-message"></div>
+
+      <!-- STEP 1: Enter Email & Server URL -->
+      <div id="step-email">
+        <div class="form-group">
+          <label for="input-server-url">Cloud Server URL</label>
+          <input type="text" id="input-server-url" class="form-input" value="http://localhost:5000" placeholder="https://your-aiva-domain.com">
+        </div>
+
+        <div class="form-group">
+          <label for="input-email">Account Email</label>
+          <input type="email" id="input-email" class="form-input" placeholder="you@example.com" autofocus>
+        </div>
+
+        <button id="btn-request-otp" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px; margin-top: 8px;">
+          Send Verification Code
+        </button>
+      </div>
+
+      <!-- STEP 2: Enter 6-Digit OTP -->
+      <div id="step-otp" style="display: none;">
+        <p style="font-size: 13px; color: #94a3b8; text-align: center; margin-bottom: 12px;">
+          Enter the 6-digit code sent to <strong id="display-email" style="color: #38bdf8;"></strong>:
+        </p>
+
+        <div class="otp-inputs">
+          <input type="text" maxlength="1" class="otp-box" id="otp-1" autofocus>
+          <input type="text" maxlength="1" class="otp-box" id="otp-2">
+          <input type="text" maxlength="1" class="otp-box" id="otp-3">
+          <input type="text" maxlength="1" class="otp-box" id="otp-4">
+          <input type="text" maxlength="1" class="otp-box" id="otp-5">
+          <input type="text" maxlength="1" class="otp-box" id="otp-6">
+        </div>
+
+        <button id="btn-verify-otp" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px; margin-top: 14px;">
+          Verify &amp; Connect Device
+        </button>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 16px;">
+          <button id="btn-back-email" class="btn" style="font-size: 12px;">← Change Email</button>
+          <button id="btn-resend-otp" class="btn" style="font-size: 12px;">Resend Code</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+  <script>
+    initLoginView();
+  </script>
+</body>
+</html>
+

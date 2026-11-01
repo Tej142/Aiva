@@ -2,8 +2,22 @@
 # Security & Secrets (NEVER push API keys or private keys)
 # ============================================================
 config/secrets.json
+.env
+*.env
 *.key
 *.pem
+*.db
+storage/*.db
+storage/downloads/
+*.exe
+
+# ============================================================
+# Windows Companion App & Node Artifacts
+# ============================================================
+node_modules/
+windows-agent/node_modules/
+windows-agent/dist/
+dist/
 
 # ============================================================
 # Python Bytecode & Environments

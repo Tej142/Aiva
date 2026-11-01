@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AIVA Device Agent — Settings &amp; Permissions</title>
+  <link rel="stylesheet" href="renderer.css">
+</head>
+<body>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="brand">
+      <button id="btn-back-hud" class="btn" style="margin-right: 8px;">← Back to HUD</button>
+      <div class="brand-title">Agent Settings &amp; Security</div>
+    </div>
+    <div class="top-bar-controls">
+      <div class="status-pill">
+        <span class="status-dot connected" id="settings-status-dot"></span>
+        <span id="settings-status-text">Connected</span>
+      </div>
+      <button id="btn-logout" class="btn btn-danger">Log Out</button>
+    </div>
+  </div>
+
+  <div class="settings-container">
+
+    <!-- 1. DEVICE & CLOUD SERVER -->
+    <div class="settings-section">
+      <h2>🖥️ Device Identity &amp; Server Connection</h2>
+      <p class="subtitle">Configuration details for this Windows endpoint.</p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+        <div class="form-group">
+          <label>Device Name</label>
+          <input type="text" id="cfg-device-name" class="form-input" readonly>
+        </div>
+        <div class="form-group">
+          <label>Account Email</label>
+          <input type="text" id="cfg-user-email" class="form-input" readonly>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>AIVA Cloud Server URL</label>
+        <div style="display: flex; gap: 10px;">
+          <input type="text" id="cfg-server-url" class="form-input">
+          <button id="btn-save-server-url" class="btn btn-primary" style="flex-shrink: 0;">Save URL</button>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-top: 14px;">
+        <button id="btn-reconnect-ws" class="btn">🔄 Reconnect Channel</button>
+      </div>
+    </div>
+
+    <!-- 2. DESKTOP RUNTIME PREFERENCES -->
+    <div class="settings-section">
+      <h2>⚙️ Desktop Behavior</h2>
+      <p class="subtitle">System tray and startup preferences.</p>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Start with Windows</h3>
+          <p>Automatically launch AIVA Device Agent in background on system boot.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggle-autostart">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Keep Running in Background</h3>
+          <p>When closing the window, minimize to the system tray so AIVA can still receive commands.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggle-background">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 3. CAPABILITY PERMISSIONS (SECURITY SHIELD) -->
+    <div class="settings-section">
+      <h2>🛡️ Device Capability Permissions</h2>
+      <p class="subtitle">Strictly control what actions Cloud AIVA is permitted to execute on this Windows computer. Dangerous actions are disabled by default.</p>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Open Applications &amp; Web URLs</h3>
+          <p>Allow AIVA to launch allowed Windows apps (Notepad, Calc, Chrome, etc.) and open websites.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-open-apps">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Media Playback &amp; System Audio</h3>
+          <p>Allow AIVA to adjust volume, mute, and toggle play/pause.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-media-volume">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Keyboard &amp; Typing Input <span class="perm-danger-badge">Elevated</span></h3>
+          <p>Allow AIVA to type text or send keystrokes to the focused active window.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-keyboard">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Desktop Screen Capture <span class="perm-danger-badge">Elevated</span></h3>
+          <p>Allow AIVA to capture screenshot of your monitor upon explicit command.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-screenshot">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>Local File &amp; Folder Access <span class="perm-danger-badge">Elevated</span></h3>
+          <p>Allow opening files within user Documents, Desktop, and Downloads.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-files">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="permission-item">
+        <div class="perm-info">
+          <h3>System Power &amp; Workstation Lock <span class="perm-danger-badge">Elevated</span></h3>
+          <p>Allow locking computer workstation. Requires confirmation popup on screen.</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="perm-power">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 4. LIVE ACTIVITY LOG -->
+    <div class="settings-section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h2>📋 Live Command Activity Log</h2>
+        <button id="btn-clear-logs" class="btn" style="font-size: 11px;">Clear Log</button>
+      </div>
+      <p class="subtitle">Real-time audit log of commands received from Cloud AIVA.</p>
+
+      <div style="max-height: 260px; overflow-y: auto; background-color: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px;">
+        <table class="activity-log-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Parameters</th>
+              <th>Status</th>
+              <th>Message / Result</th>
+            </tr>
+          </thead>
+          <tbody id="activity-log-body">
+            <tr>
+              <td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">No commands received yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="renderer.js"></script>
+  <script>
+    initSettingsView();
+  </script>
+</body>
+</html>
+

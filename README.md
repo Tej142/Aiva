@@ -129,29 +129,150 @@ aiva/
 
 ### 1. Prerequisites
 - Python 3.10+
-- Google Chrome & ChromeDriver (for browser automation)
+- Node.js 18+ & npm (for building the Windows Device Agent)
+- Google Chrome & ChromeDriver (for local browser automation)
 
-### 2. Configuration
-Ensure your API keys are configured in `config/secrets.json`:
-```json
-{
-    "mistral_api_key": "YOUR_MISTRAL_KEY",
-    "tavily_api_key": "YOUR_TAVILY_KEY",
-    "groq_api_key": "YOUR_GROQ_KEY",
-    "gemini_api_key": "YOUR_GEMINI_KEY"
+### 2. Configuration & Secrets
+Copy `.env.example` to `.env` in the project root:
+```bash
+cp .env.example .env
+```
+Configure your environment variables in `.env` (**never commit `.env`**):
+```env
+BREVO_API_KEY=               # Brevo transactional API key for sending email OTPs
+BREVO_SENDER_EMAIL=          # Verified sender email in your Brevo account
+BREVO_SENDER_NAME=           # Name displayed in OTP emails (e.g. AIVA Assistant)
+JWT_SECRET=                  # Strong random hex string for signing JWT tokens
+JWT_ACCESS_EXPIRY_MINUTES=30 # Access token validity in minutes
+JWT_REFRESH_EXPIRY_DAYS=30   # Refresh token validity in days
+AIVA_HOST=0.0.0.0
+AIVA_PORT=5000
+GROQ_API_KEY=                # Optional if defined in config/secrets.json
+MISTRAL_API_KEY=             # Optional if defined in config/secrets.json
+GEMINI_API_KEY=              # Optional if defined in config/secrets.json
+TAVILY_API_KEY=              # Optional if defined in config/secrets.json
+```
+
+---
+
+## 🖥️ AIVA Windows Device Agent (Companion App)
+
+The **AIVA Device Agent** connects any Windows computer to your cloud-deployed AIVA instance via an outbound real-time WebSocket connection. It allows AIVA to execute local desktop actions (open apps, launch URLs in default browser, control volume/media, capture screenshots, and open files) securely on your machine with a strict local capability allowlist and native confirmation popups.
+
+### 1. Installing & Running in Development:
+```bash
+cd windows-agent
+npm install
+npm start
+```
+
+### 2. Building the Windows Installer (`.exe`):
+To generate the standalone NSIS Windows installer:
+```bash
+cd windows-agent
+$env:CSC_IDENTITY_AUTO_DISCOVERY="false" # On PowerShell
+npm run build
+```
+The resulting installer is generated at:
+`windows-agent/dist/AIVA Device Agent Setup 1.0.0.exe`
+
+An unpacked standalone folder is also generated at:
+`windows-agent/dist/win-unpacked/AIVA Device Agent.exe`
+
+---
+
+## ☁️ Oracle Cloud Deployment & WSS Configuration
+
+### 1. Ports to Open in Oracle VCN Security List & Ubuntu Firewall:
+- Port `80` (HTTP)
+- Port `443` (HTTPS)
+- Port `5000` (AIVA Server)
+
+```bash
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 5000 -j ACCEPT
+sudo netfilter-persistent save
+```
+
+### 2. Running AIVA as a `systemd` Service:
+Create `/etc/systemd/system/aiva.service`:
+```ini
+[Unit]
+Description=AIVA Cloud Master Engine
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/aiva
+ExecStart=/home/ubuntu/aiva/venv/bin/python aiva_server.py
+Restart=always
+RestartSec=3
+EnvironmentFile=/home/ubuntu/aiva/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+Enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable aiva
+sudo systemctl start aiva
+```
+
+### 3. Reverse Proxy & WebSocket (WSS) Configuration:
+
+#### Option A: Cloudflare Tunnel (Recommended — Zero Port Forwarding):
+Cloudflare Tunnel natively passes WebSockets with zero extra configuration:
+```bash
+cloudflared tunnel --url http://localhost:5000
+```
+This generates an `https://<subdomain>.trycloudflare.com` URL that handles both `https://` REST APIs and `wss://` WebSockets at `/ws/device`.
+
+#### Option B: Nginx Reverse Proxy with WSS Support:
+If using Nginx, ensure the `Upgrade` headers are forwarded:
+```nginx
+server {
+    listen 80;
+    server_name your-aiva-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-aiva-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-aiva-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-aiva-domain.com/privkey.pem;
+
+    # Standard Web UI and REST APIs
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket Real-time Command Channel
+    location /ws/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
 }
 ```
 
-### 3. Running AIVA
+---
 
-#### Interactive Terminal Interface:
+## 🧪 Automated Testing
+Run the complete test suite (unit tests, security tests, API tests, and WebSocket e2e flow):
 ```bash
-python main.py
-```
-
-#### Alexa / External Webhook Server:
-```bash
-python aiva_server.py
+python -m unittest discover tests
 ```
 
 ---
