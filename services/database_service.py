@@ -202,8 +202,10 @@ class DatabaseService:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Find or establish primary user
-        primary = cursor.execute("SELECT * FROM users WHERE lower(email) = 'charanpc1420091@gmail.com'").fetchone()
+        # Find or establish primary user (supports both of Charan's emails)
+        primary = cursor.execute(
+            "SELECT * FROM users WHERE lower(email) IN ('charanpc1420091@gmail.com', 'charante153624@gmail.com') ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
         if not primary:
             primary = cursor.execute(
                 "SELECT * FROM users WHERE lower(email) LIKE '%charan%' OR is_active = 1 ORDER BY created_at ASC LIMIT 1"
@@ -222,6 +224,14 @@ class DatabaseService:
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+        # Target all primary/charan users so both email variants have full access to patterns
+        target_users = cursor.execute(
+            "SELECT id FROM users WHERE lower(email) IN ('charanpc1420091@gmail.com', 'charante153624@gmail.com') OR lower(email) LIKE '%charan%'"
+        ).fetchall()
+        target_ids = [u["id"] for u in target_users]
+        if primary_id not in target_ids:
+            target_ids.append(primary_id)
+
         # 1. Migrate memory/user_memory.json to user_memories
         user_mem_path = os.path.join(base_dir, "memory", "user_memory.json")
         if os.path.exists(user_mem_path):
@@ -229,13 +239,14 @@ class DatabaseService:
                 with open(user_mem_path, "r", encoding="utf-8") as f:
                     mem_data = json.load(f)
                 now = time.time()
-                for k, v in mem_data.items():
-                    mem_id = f"mem_{uuid.uuid4().hex[:12]}"
-                    cursor.execute(
-                        """INSERT OR IGNORE INTO user_memories (id, user_id, key, value_json, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (mem_id, primary_id, k, json.dumps(v), now, now)
-                    )
+                for target_uid in target_ids:
+                    for k, v in mem_data.items():
+                        mem_id = f"mem_{uuid.uuid4().hex[:12]}"
+                        cursor.execute(
+                            """INSERT OR IGNORE INTO user_memories (id, user_id, key, value_json, created_at, updated_at)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (mem_id, target_uid, k, json.dumps(v), now, now)
+                        )
                 conn.commit()
             except Exception as e:
                 logger.warning(f"Failed migrating user_memory.json: {e}")
@@ -281,13 +292,14 @@ class DatabaseService:
                 with open(task_pat_path, "r", encoding="utf-8") as f:
                     patterns = json.load(f)
                 now = time.time()
-                for pat_name, pat_data in patterns.items():
-                    pat_id = f"pat_{uuid.uuid4().hex[:12]}"
-                    cursor.execute(
-                        """INSERT OR IGNORE INTO user_task_patterns (id, user_id, pattern_name, pattern_json, created_at)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (pat_id, primary_id, pat_name, json.dumps(pat_data), now)
-                    )
+                for target_uid in target_ids:
+                    for pat_name, pat_data in patterns.items():
+                        pat_id = f"pat_{uuid.uuid4().hex[:12]}"
+                        cursor.execute(
+                            """INSERT OR IGNORE INTO user_task_patterns (id, user_id, pattern_name, pattern_json, created_at)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            (pat_id, target_uid, pat_name, json.dumps(pat_data), now)
+                        )
                 conn.commit()
             except Exception as e:
                 logger.warning(f"Failed migrating task_patterns.json: {e}")
@@ -332,6 +344,14 @@ class DatabaseService:
             (user_id, email.strip(), name.strip(), onboarded, now)
         )
         conn.commit()
+
+        # If Charan or primary user, ensure patterns and memories are migrated to this user
+        if "charan" in email.lower() or conn.execute("SELECT count(*) as c FROM users").fetchone()["c"] == 1:
+            try:
+                self._migrate_existing_data()
+            except Exception as e:
+                logger.warning(f"Failed to auto-migrate data for new user {email}: {e}")
+
         return {
             "id": user_id,
             "email": email.strip().lower(),
