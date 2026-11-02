@@ -516,18 +516,38 @@ async function initMainView() {
     });
   }
 
-  // Embedded HUD Loader
-  function loadEmbeddedHud(serverUrl) {
+  // Embedded HUD Loader with seamless SSO session bridge
+  async function loadEmbeddedHud(serverUrl) {
     if (!hudFrame) return;
-    const targetUrl = serverUrl || 'https://aivaserve.duckdns.org';
+    const targetUrl = (serverUrl || 'https://aivaserve.duckdns.org').replace(/\/+$/, '');
     if (hudLoading) hudLoading.style.display = 'flex';
     if (hudError) hudError.style.display = 'none';
 
-    hudFrame.src = targetUrl;
+    let fullUrl = targetUrl;
+    try {
+      const tokens = await window.aivaAgent.getTokens();
+      if (tokens && tokens.accessToken) {
+        fullUrl += #token=&refresh=;
+      }
+    } catch (e) {
+      console.warn('Could not retrieve auth tokens for embedded HUD:', e);
+    }
 
-    hudFrame.onload = () => {
+    hudFrame.src = fullUrl;
+
+    hudFrame.onload = async () => {
       if (hudLoading) hudLoading.style.display = 'none';
       if (hudError) hudError.style.display = 'none';
+      // Post-message backup sync
+      try {
+        const tokens = await window.aivaAgent.getTokens();
+        if (tokens && tokens.accessToken && hudFrame.contentWindow) {
+          hudFrame.contentWindow.postMessage({
+            type: 'AIVA_AUTH_SESSION',
+            tokens: { access_token: tokens.accessToken, refresh_token: tokens.refreshToken }
+          }, '*');
+        }
+      } catch {}
     };
 
     hudFrame.onerror = () => {

@@ -1391,3 +1391,9 @@ body::before {
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 10px; }
+
+/* ─── Embedded inside Desktop Companion App ─────────────────────────────── */
+body.is-embedded #btn-download-app,
+body.is-embedded #btn-web-logout {
+    display: none !important;
+}

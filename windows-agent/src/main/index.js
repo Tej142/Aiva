@@ -320,6 +320,14 @@ function setupIpcHandlers() {
   });
 
   // Auth: Logout (Clears auth tokens and session storage completely)
+    // Auth: Get Tokens for embedded Web HUD SSO
+  ipcMain.handle('auth:getTokens', () => {
+    return {
+      accessToken: store.getDecrypted('encryptedAccessToken'),
+      refreshToken: store.getDecrypted('encryptedRefreshToken')
+    };
+  });
+
   ipcMain.handle('auth:logout', async () => {
     const serverUrl = getServerUrl();
     const refreshToken = store.getDecrypted('encryptedRefreshToken');

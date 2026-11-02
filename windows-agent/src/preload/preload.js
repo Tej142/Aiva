@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('aivaAgent', {
   completeOnboarding: (name) => ipcRenderer.invoke('auth:onboarding', name),
   getMe: () => ipcRenderer.invoke('auth:getMe'),
   logout: () => ipcRenderer.invoke('auth:logout'),
+  getTokens: () => ipcRenderer.invoke('auth:getTokens'),
 
   // Config & Status
   getConfig: () => ipcRenderer.invoke('config:get'),

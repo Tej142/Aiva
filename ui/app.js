@@ -4,6 +4,7 @@
 // =====================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    syncEmbeddedSession();
     initTheme();
     initClock();
     initNavigation();
@@ -88,6 +89,35 @@ function initClock() {
 // ---------------------------------------------------------------------
 // 2. Authentication & Session Management
 // ---------------------------------------------------------------------
+function syncEmbeddedSession() {
+    const isEmbedded = window.self !== window.top;
+    if (isEmbedded) {
+        document.body.classList.add('is-embedded');
+    }
+
+    if (window.location.hash) {
+        try {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            const token = params.get('token');
+            const refresh = params.get('refresh');
+            if (token) {
+                setTokens({ access_token: token, refresh_token: refresh || '' });
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+        } catch (e) {
+            console.warn('Failed to parse auth hash:', e);
+        }
+    }
+}
+
+window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'AIVA_AUTH_SESSION' && event.data.tokens) {
+        setTokens(event.data.tokens);
+        checkAuthStatus();
+    }
+});
+
 function getAccessToken() {
     return localStorage.getItem('aiva_access_token') || '';
 }
