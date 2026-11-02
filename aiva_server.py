@@ -193,13 +193,32 @@ def api_chat():
         # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
         result = run_async(kernel.input_handler.process_query(msg, speak=True))
         
+        reply_text = result.get("response", "Done.")
         response_data = {
             "status": "success",
             "query": msg,
-            "response": result.get("response", "Done."),
+            "response": reply_text,
             "route": result.get("route", "general"),
             "should_end_session": result.get("should_end_session", False)
         }
+
+        # Synthesize neural voice audio (Edge TTS) for client playback
+        if reply_text and kernel and hasattr(kernel, 'voice_service') and kernel.voice_service:
+            try:
+                import base64
+                clean_tts = _clean_for_speech(reply_text)
+                if clean_tts:
+                    from services.voice_service import _has_telugu_script, VOICE_MOHAN, VOICE_PRABHAT, RATE_PRABHAT, RATE_MOHAN, PITCH_PRABHAT, PITCH_MOHAN
+                    voice = VOICE_MOHAN if _has_telugu_script(clean_tts) else VOICE_PRABHAT
+                    rate = RATE_MOHAN if _has_telugu_script(clean_tts) else RATE_PRABHAT
+                    pitch = PITCH_MOHAN if _has_telugu_script(clean_tts) else PITCH_PRABHAT
+                    audio_bytes = run_async(kernel.voice_service._generate_edge_tts_bytes(
+                        clean_tts, voice, rate, pitch
+                    ), timeout=6.0)
+                    if audio_bytes:
+                        response_data["audio_base64"] = base64.b64encode(audio_bytes).decode("utf-8")
+            except Exception as tts_err:
+                print(f"[TTS Generate Warning]: {tts_err}")
 
         # Check if a recent screenshot was taken
         screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage", "last_screenshot.png")
@@ -563,6 +582,117 @@ def api_voice_control():
 
     else:
         return jsonify({"status": "error", "message": f"Unknown action '{action}'"}), 400
+
+@app.route("/api/voice/transcribe", methods=["POST"])
+def api_voice_transcribe():
+    """
+    Transcribes audio from the Web HUD / Electron desktop app using Groq whisper-large-v3.
+    """
+    auth_user = get_authenticated_user()
+    if not auth_user:
+        return jsonify({"status": "error", "error": "Authentication required"}), 401
+
+    audio_bytes = None
+    filename = "speech.webm"
+
+    if "audio" in request.files:
+        f = request.files["audio"]
+        audio_bytes = f.read()
+        filename = f.filename or "speech.webm"
+    elif request.data:
+        audio_bytes = request.data
+        ctype = request.content_type or ""
+        if "wav" in ctype:
+            filename = "speech.wav"
+        elif "mp4" in ctype:
+            filename = "speech.mp4"
+        elif "ogg" in ctype:
+            filename = "speech.ogg"
+
+    if not audio_bytes:
+        return jsonify({"status": "error", "error": "No audio data provided"}), 400
+
+    try:
+        from core.shared.config_loader import load_secrets
+        import groq
+
+        secrets = load_secrets()
+        keys = secrets.get("groq_api_keys", [])
+        if not keys and secrets.get("groq_api_key"):
+            keys = [secrets.get("groq_api_key")]
+
+        if not keys:
+            return jsonify({"status": "error", "error": "No Groq API keys configured for transcription"}), 500
+
+        transcript_text = ""
+        last_err = None
+        for key in keys:
+            try:
+                client = groq.Groq(api_key=key)
+                transcription = client.audio.transcriptions.create(
+                    file=(filename, audio_bytes),
+                    model="whisper-large-v3"
+                )
+                transcript_text = getattr(transcription, 'text', str(transcription)).strip()
+                if transcript_text:
+                    break
+            except Exception as e:
+                last_err = e
+                continue
+
+        if not transcript_text and last_err:
+            raise last_err
+
+        return jsonify({"status": "success", "text": transcript_text})
+    except Exception as e:
+        print(f"[Voice Transcribe Error]: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/api/voice/tts", methods=["GET", "POST"])
+def api_voice_tts():
+    """
+    Streams Microsoft Edge Neural voice MP3 audio for given text.
+    """
+    text_input = ""
+    if request.method == "POST":
+        data = request.json or {}
+        text_input = data.get("text", "")
+    else:
+        text_input = request.args.get("text", "")
+
+    if not text_input:
+        return jsonify({"status": "error", "error": "Missing text"}), 400
+
+    clean_text = _clean_for_speech(text_input)
+    if not clean_text:
+        return jsonify({"status": "error", "error": "No speakable text"}), 400
+
+    try:
+        import io
+        from services.voice_service import _has_telugu_script, VOICE_MOHAN, VOICE_PRABHAT, RATE_PRABHAT, RATE_MOHAN, PITCH_PRABHAT, PITCH_MOHAN
+
+        voice = VOICE_MOHAN if _has_telugu_script(clean_text) else VOICE_PRABHAT
+        rate = RATE_MOHAN if _has_telugu_script(clean_text) else RATE_PRABHAT
+        pitch = PITCH_MOHAN if _has_telugu_script(clean_text) else PITCH_PRABHAT
+
+        audio_bytes = run_async(kernel.voice_service._generate_edge_tts_bytes(
+            clean_text, voice, rate, pitch
+        ), timeout=8.0)
+
+        if not audio_bytes:
+            return jsonify({"status": "error", "error": "Failed to synthesize audio"}), 500
+
+        return send_file(
+            io.BytesIO(audio_bytes),
+            mimetype="audio/mpeg",
+            as_attachment=False,
+            download_name="speech.mp3"
+        )
+    except Exception as e:
+        print(f"[TTS Stream Error]: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 
 
 # =====================================================================

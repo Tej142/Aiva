@@ -81,6 +81,20 @@ class TestApiEndpoints(unittest.TestCase):
         resp = self.client.get("/api/devices", headers=headers)
         self.assertEqual(len(resp.get_json()["devices"]), 0)
 
+        # 10. Voice endpoints validation
+        # Missing auth for transcription (using unauthenticated client)
+        unauthed_client = app.test_client()
+        resp = unauthed_client.post("/api/voice/transcribe")
+        self.assertEqual(resp.status_code, 401)
+
+        # Authed but missing audio payload
+        resp = self.client.post("/api/voice/transcribe", headers=headers)
+        self.assertEqual(resp.status_code, 400)
+
+        # TTS missing text
+        resp = self.client.get("/api/voice/tts")
+        self.assertEqual(resp.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

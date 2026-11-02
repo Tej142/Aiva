@@ -496,6 +496,17 @@ function setupIpcHandlers() {
 // APP LIFECYCLE
 // ---------------------------------------------------------------------
 app.whenReady().then(() => {
+  // Grant microphone & media permissions for voice interaction
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media' || permission === 'microphone' || permission === 'audioCapture') {
+      return callback(true);
+    }
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return permission === 'media' || permission === 'microphone' || permission === 'audioCapture';
+  });
+
   executor = new DeviceActionExecutor(perms, () => mainWindow);
 
   wsClient = new DeviceWebSocketClient(

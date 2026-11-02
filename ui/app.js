@@ -596,7 +596,8 @@ async function sendUserMessage(query) {
                 updateVisionSnapshot(data.screenshot_base64);
             }
 
-            setTimeout(() => setNeuralCoreState('idle'), 3500);
+            // Play neural TTS audio output
+            playVoiceOutput(reply, data.audio_base64);
         } else {
             appendChatMessage('aiva', `⚠️ Error: ${data.error || 'Failed to execute command.'}`);
             setNeuralCoreState('idle');
@@ -753,70 +754,244 @@ function setNeuralCoreState(state) {
 }
 
 // ---------------------------------------------------------------------
-// 5. Web Speech API (In-Browser Mic)
+// 5. Dual-Engine Speech Input & Neural Voice Output
 // ---------------------------------------------------------------------
-function initSpeechRecognition() {
-    const micBtn = document.getElementById('btn-mic-input');
-    const promptInput = document.getElementById('user-prompt-input');
+let currentAudioPlayer = null;
+let isVoiceMuted = false;
+let mediaRecorderInstance = null;
+let audioChunks = [];
+let silenceTimer = null;
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        if (micBtn) micBtn.title = "Speech recognition not supported in this browser.";
+function playVoiceOutput(text, audioBase64) {
+    if (isVoiceMuted) {
+        setNeuralCoreState('idle');
         return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    stopVoiceOutput();
+    setNeuralCoreState('speaking');
 
-    let isListening = false;
-
-    if (micBtn) {
-        micBtn.addEventListener('click', () => {
-            if (!isListening) {
-                try {
-                    recognition.start();
-                    micBtn.classList.add('listening');
-                    isListening = true;
-                } catch (e) {
-                    console.warn(e);
-                }
-            } else {
-                recognition.stop();
-                micBtn.classList.remove('listening');
-                isListening = false;
-            }
-        });
+    if (audioBase64) {
+        try {
+            currentAudioPlayer = new Audio('data:audio/mp3;base64,' + audioBase64);
+            currentAudioPlayer.onended = () => {
+                setNeuralCoreState('idle');
+                currentAudioPlayer = null;
+            };
+            currentAudioPlayer.onerror = (e) => {
+                console.warn('Audio base64 playback error, using speech synthesis:', e);
+                fallbackBrowserTts(text);
+            };
+            currentAudioPlayer.play().catch((err) => {
+                console.warn('Audio play prevented (autoplay policy):', err);
+                fallbackBrowserTts(text);
+            });
+            return;
+        } catch (err) {
+            console.warn('Audio init error:', err);
+        }
     }
 
-    recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-            .map(result => result[0])
-            .map(result => result.transcript)
-            .join('');
+    fallbackBrowserTts(text);
+}
 
-        if (promptInput) promptInput.value = transcript;
+function fallbackBrowserTts(text) {
+    if (!window.speechSynthesis || isVoiceMuted) {
+        setTimeout(() => setNeuralCoreState('idle'), 2500);
+        return;
+    }
+    try {
+        window.speechSynthesis.cancel();
+        const clean = (text || '').replace(/[*_#`~\[\]>]+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\b(?:PDF|Video|Website|Blog)\b/g, '');
+        const utterance = new SpeechSynthesisUtterance(clean);
+        utterance.rate = 1.05;
+        utterance.onend = () => setNeuralCoreState('idle');
+        utterance.onerror = () => setNeuralCoreState('idle');
+        window.speechSynthesis.speak(utterance);
+    } catch {
+        setTimeout(() => setNeuralCoreState('idle'), 2500);
+    }
+}
 
-        if (event.results[0].isFinal) {
-            micBtn.classList.remove('listening');
-            isListening = false;
-            if (transcript.trim()) {
-                sendUserMessage(transcript.trim());
-                if (promptInput) promptInput.value = '';
+function stopVoiceOutput() {
+    if (currentAudioPlayer) {
+        try {
+            currentAudioPlayer.pause();
+            currentAudioPlayer.currentTime = 0;
+        } catch {}
+        currentAudioPlayer = null;
+    }
+    if (window.speechSynthesis) {
+        try { window.speechSynthesis.cancel(); } catch {}
+    }
+    setNeuralCoreState('idle');
+}
+
+function initSpeechRecognition() {
+    const micBtn = document.getElementById('btn-mic-input');
+    const promptInput = document.getElementById('user-prompt-input');
+    if (!micBtn) return;
+
+    let isRecording = false;
+    const NativeSpeech = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    micBtn.addEventListener('click', async () => {
+        if (isRecording) {
+            stopListening();
+        } else {
+            startListening();
+        }
+    });
+
+    async function startListening() {
+        stopVoiceOutput();
+        isRecording = true;
+        micBtn.classList.add('listening');
+        if (promptInput) {
+            promptInput.placeholder = "Listening... Speak now";
+        }
+        setNeuralCoreState('thinking');
+
+        // Prefer NativeSpeech if available
+        if (NativeSpeech) {
+            try {
+                const recognition = new NativeSpeech();
+                recognition.continuous = false;
+                recognition.interimResults = true;
+                recognition.lang = 'en-US';
+
+                recognition.onresult = (event) => {
+                    const transcript = Array.from(event.results)
+                        .map(r => r[0].transcript)
+                        .join('');
+                    if (promptInput) promptInput.value = transcript;
+                    if (event.results[0].isFinal) {
+                        finishTranscript(transcript);
+                    }
+                };
+
+                recognition.onerror = (e) => {
+                    console.warn('Native speech error, switching to MediaRecorder:', e);
+                    try { recognition.stop(); } catch {}
+                    startMediaRecorder();
+                };
+
+                recognition.onend = () => {
+                    if (isRecording) {
+                        stopListening();
+                    }
+                };
+
+                recognition.start();
+                micBtn._activeRecognition = recognition;
+                return;
+            } catch (e) {
+                console.warn('Native speech start failed, falling back to MediaRecorder:', e);
             }
         }
-    };
 
-    recognition.onerror = () => {
-        micBtn.classList.remove('listening');
-        isListening = false;
-    };
+        // Robust fallback: MediaRecorder + Groq Whisper
+        await startMediaRecorder();
+    }
 
-    recognition.onend = () => {
+    async function startMediaRecorder() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioChunks = [];
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+            
+            mediaRecorderInstance = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+            mediaRecorderInstance.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    audioChunks.push(e.data);
+                }
+            };
+
+            mediaRecorderInstance.onstop = async () => {
+                stream.getTracks().forEach(t => t.stop());
+                if (audioChunks.length === 0) {
+                    resetInputState();
+                    return;
+                }
+
+                if (promptInput) promptInput.placeholder = "Transcribing with Groq Whisper...";
+                const mime = mediaRecorderInstance.mimeType || 'audio/webm';
+                const audioBlob = new Blob(audioChunks, { type: mime });
+
+                try {
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'mic.webm');
+
+                    const resp = await fetch('/api/voice/transcribe', {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${getAccessToken()}` },
+                        body: formData
+                    });
+                    const data = await resp.json();
+
+                    if (data.status === 'success' && data.text && data.text.trim()) {
+                        finishTranscript(data.text.trim());
+                    } else {
+                        showHudToast(data.error || 'Could not understand audio. Please try again.', 'error');
+                        resetInputState();
+                    }
+                } catch (err) {
+                    console.error('Transcription error:', err);
+                    showHudToast('Voice transcription failed.', 'error');
+                    resetInputState();
+                }
+            };
+
+            mediaRecorderInstance.start(250);
+
+            // Auto-stop after 12 seconds max
+            silenceTimer = setTimeout(() => {
+                if (isRecording) stopListening();
+            }, 12000);
+
+        } catch (err) {
+            console.error('Microphone access denied:', err);
+            showHudToast('Microphone access denied. Please allow microphone in settings.', 'error');
+            resetInputState();
+        }
+    }
+
+    function stopListening() {
+        isRecording = false;
+        if (silenceTimer) clearTimeout(silenceTimer);
         micBtn.classList.remove('listening');
-        isListening = false;
-    };
+
+        if (micBtn._activeRecognition) {
+            try { micBtn._activeRecognition.stop(); } catch {}
+            micBtn._activeRecognition = null;
+        }
+
+        if (mediaRecorderInstance && mediaRecorderInstance.state !== 'inactive') {
+            try { mediaRecorderInstance.stop(); } catch {}
+        }
+    }
+
+    function finishTranscript(text) {
+        stopListening();
+        resetInputState();
+        if (text && text.trim()) {
+            if (promptInput) promptInput.value = text;
+            sendUserMessage(text.trim());
+            if (promptInput) promptInput.value = '';
+        }
+    }
+
+    function resetInputState() {
+        isRecording = false;
+        micBtn.classList.remove('listening');
+        if (promptInput) {
+            promptInput.placeholder = "Type a command or ask anything...";
+        }
+        setNeuralCoreState('idle');
+    }
 }
 
 // ---------------------------------------------------------------------

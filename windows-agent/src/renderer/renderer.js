@@ -527,7 +527,7 @@ async function initMainView() {
     try {
       const tokens = await window.aivaAgent.getTokens();
       if (tokens && tokens.accessToken) {
-        fullUrl += #token=&refresh=;
+        fullUrl += `#token=${encodeURIComponent(tokens.accessToken)}&refresh=${encodeURIComponent(tokens.refreshToken || "")}`;
       }
     } catch (e) {
       console.warn('Could not retrieve auth tokens for embedded HUD:', e);
