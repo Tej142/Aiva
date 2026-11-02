@@ -93,6 +93,8 @@ function syncEmbeddedSession() {
     const isEmbedded = window.self !== window.top;
     if (isEmbedded) {
         document.body.classList.add('is-embedded');
+        const overlay = document.getElementById('web-auth-overlay');
+        if (overlay) overlay.style.display = 'none';
     }
 
     if (window.location.hash) {
@@ -108,6 +110,12 @@ function syncEmbeddedSession() {
         } catch (e) {
             console.warn('Failed to parse auth hash:', e);
         }
+    }
+
+    if (isEmbedded && !getAccessToken()) {
+        try {
+            window.parent.postMessage({ type: 'AIVA_REQUEST_AUTH' }, '*');
+        } catch {}
     }
 }
 
@@ -164,7 +172,13 @@ function onAuthSuccess(user) {
 }
 
 function showWebAuthModal() {
+    const isEmbedded = window.self !== window.top || document.body.classList.contains('is-embedded');
     const overlay = document.getElementById('web-auth-overlay');
+    if (isEmbedded) {
+        // Inside desktop companion app, never show web auth modal overlay
+        if (overlay) overlay.style.display = 'none';
+        return;
+    }
     if (overlay) overlay.style.display = 'flex';
 
     const logoutBtn = document.getElementById('btn-web-logout');

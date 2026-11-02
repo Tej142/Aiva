@@ -556,6 +556,23 @@ async function initMainView() {
     };
   }
 
+  // Handle token request from embedded frame
+  window.addEventListener('message', async (event) => {
+    if (event.data && event.data.type === 'AIVA_REQUEST_AUTH') {
+      try {
+        const tokens = await window.aivaAgent.getTokens();
+        if (tokens && tokens.accessToken && hudFrame && hudFrame.contentWindow) {
+          hudFrame.contentWindow.postMessage({
+            type: 'AIVA_AUTH_SESSION',
+            tokens: { access_token: tokens.accessToken, refresh_token: tokens.refreshToken }
+          }, '*');
+        }
+      } catch (err) {
+        console.warn('Error bridging auth session to iframe:', err);
+      }
+    }
+  });
+
   if (btnHudRetry) {
     btnHudRetry.addEventListener('click', async () => {
       const cfg = await window.aivaAgent.getConfig();

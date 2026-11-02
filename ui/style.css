@@ -1393,7 +1393,8 @@ body::before {
 ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 10px; }
 
 /* ─── Embedded inside Desktop Companion App ─────────────────────────────── */
-body.is-embedded #btn-download-app,
-body.is-embedded #btn-web-logout {
+body.is-embedded #btn-download-app,
+body.is-embedded #btn-web-logout,
+body.is-embedded #web-auth-overlay {
     display: none !important;
 }
