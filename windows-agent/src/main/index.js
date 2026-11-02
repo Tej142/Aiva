@@ -12,6 +12,14 @@ let tray = null;
 let isQuitting = false;
 
 const store = new SecureStore();
+
+function getServerUrl() {
+  const url = store.get('serverUrl');
+  if (!url || url === 'http://localhost:5000' || url.includes('aiva-hub')) {
+    return 'https://aivaserve.duckdns.org';
+  }
+  return url.replace(/\/+$/, '');
+}
 const perms = new PermissionsManager();
 let executor = null;
 let wsClient = null;
@@ -183,7 +191,7 @@ function setupIpcHandlers() {
 
   // Auth: Register (name + email)
   ipcMain.handle('auth:register', async (_event, { name, email }) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     try {
       const resp = await fetch(`${serverUrl}/api/auth/register`, {
         method: 'POST',
@@ -192,13 +200,13 @@ function setupIpcHandlers() {
       });
       return await resp.json();
     } catch (err) {
-      return { status: 'error', message: `Server connection failed: ${err.message}` };
+      return { status: 'error', message: `Server connection failed (${serverUrl}): ${err.message}` };
     }
   });
 
   // Auth: Request OTP (login only email)
   ipcMain.handle('auth:requestOtp', async (_event, email) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     try {
       const resp = await fetch(`${serverUrl}/api/auth/login`, {
         method: 'POST',
@@ -207,13 +215,13 @@ function setupIpcHandlers() {
       });
       return await resp.json();
     } catch (err) {
-      return { status: 'error', message: `Server connection failed: ${err.message}` };
+      return { status: 'error', message: `Server connection failed (${serverUrl}): ${err.message}` };
     }
   });
 
   // Auth: Verify OTP and Register Device
   ipcMain.handle('auth:verifyOtp', async (_event, { email, otp, name }) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     try {
       // 1. Verify OTP
       const verifyResp = await fetch(`${serverUrl}/api/auth/verify-otp`, {
@@ -275,7 +283,7 @@ function setupIpcHandlers() {
 
   // Auth: Onboarding
   ipcMain.handle('auth:onboarding', async (_event, name) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return { status: 'error', message: 'Not authenticated' };
     try {
@@ -296,7 +304,7 @@ function setupIpcHandlers() {
 
   // Auth: Get Me
   ipcMain.handle('auth:getMe', async () => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return null;
 
@@ -313,7 +321,7 @@ function setupIpcHandlers() {
 
   // Auth: Logout (Clears auth tokens and session storage completely)
   ipcMain.handle('auth:logout', async () => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const refreshToken = store.getDecrypted('encryptedRefreshToken');
     if (refreshToken) {
       try {
@@ -340,7 +348,7 @@ function setupIpcHandlers() {
 
   // History & User Data
   ipcMain.handle('data:getHistory', async () => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return [];
     try {
@@ -355,7 +363,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('data:clearHistory', async () => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return false;
     try {
@@ -370,7 +378,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('data:getSettings', async () => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return {};
     try {
@@ -385,7 +393,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('data:saveSettings', async (_event, settings) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return false;
     try {
@@ -404,7 +412,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('data:getAuditLogs', async (_event, limit) => {
-    const serverUrl = store.get('serverUrl', 'http://localhost:5000');
+    const serverUrl = getServerUrl();
     const accessToken = store.getDecrypted('encryptedAccessToken');
     if (!accessToken) return [];
     try {
@@ -421,7 +429,7 @@ function setupIpcHandlers() {
   // Config: Get / Save
   ipcMain.handle('config:get', () => {
     return {
-      serverUrl: store.get('serverUrl', 'http://localhost:5000'),
+      serverUrl: getServerUrl(),
       userEmail: store.get('userEmail', ''),
       userName: store.get('userName', ''),
       deviceId: store.get('deviceId', ''),

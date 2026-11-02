@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 
-const DEFAULT_SERVER_URL = process.env.AIVA_SERVER_URL || (app.isPackaged ? 'https://aiva-hub.duckdns.org' : 'http://localhost:5000');
+const DEFAULT_SERVER_URL = process.env.AIVA_SERVER_URL || 'https://aivaserve.duckdns.org';
 
 class SecureStore {
   constructor() {
@@ -15,6 +15,10 @@ class SecureStore {
       if (fs.existsSync(this.configPath)) {
         const raw = fs.readFileSync(this.configPath, 'utf8');
         const parsed = JSON.parse(raw);
+        // Auto-heal legacy, non-existent, or localhost URLs
+        if (!parsed.serverUrl || parsed.serverUrl.includes('aiva-hub') || parsed.serverUrl === 'http://localhost:5000') {
+          parsed.serverUrl = DEFAULT_SERVER_URL;
+        }
         // Ensure production builds enforce HTTPS if packaged
         if (app.isPackaged && parsed.serverUrl && !parsed.serverUrl.startsWith('https://')) {
           parsed.serverUrl = DEFAULT_SERVER_URL;

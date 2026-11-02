@@ -19,7 +19,10 @@ class DeviceWebSocketClient {
     this.isManualDisconnect = false;
     this._clearTimers();
 
-    const serverUrl = this.store.get('serverUrl', 'http://localhost:5000');
+    let serverUrl = this.store.get('serverUrl') || 'https://aivaserve.duckdns.org';
+    if (serverUrl === 'http://localhost:5000' || serverUrl.includes('aiva-hub')) {
+      serverUrl = 'https://aivaserve.duckdns.org';
+    }
     const deviceToken = this.store.getDecrypted('encryptedDeviceToken');
 
     if (!deviceToken) {

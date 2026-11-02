@@ -103,14 +103,35 @@ async function initAuthView() {
     if (errorBanner) errorBanner.style.display = 'none';
   }
 
-  // Preload remembered email if available
+  // Preload remembered email and server URL
+  const serverLabel = document.getElementById('current-server-label');
+  const btnChangeServer = document.getElementById('btn-change-server');
+
   try {
     const cfg = await window.aivaAgent.getConfig();
-    if (cfg && cfg.userEmail) {
-      loginEmailInput.value = cfg.userEmail;
-      regEmailInput.value = cfg.userEmail;
+    if (cfg) {
+      if (cfg.userEmail) {
+        loginEmailInput.value = cfg.userEmail;
+        regEmailInput.value = cfg.userEmail;
+      }
+      if (serverLabel && cfg.serverUrl) {
+        serverLabel.textContent = cfg.serverUrl;
+      }
     }
   } catch {}
+
+  if (btnChangeServer) {
+    btnChangeServer.addEventListener('click', async () => {
+      const current = serverLabel ? serverLabel.textContent : 'https://aivaserve.duckdns.org';
+      const newUrl = prompt('Enter AIVA Server URL (e.g. https://aivaserve.duckdns.org):', current);
+      if (newUrl && newUrl.trim()) {
+        const clean = newUrl.trim().replace(/\/+$/, '');
+        await window.aivaAgent.saveConfig({ serverUrl: clean });
+        if (serverLabel) serverLabel.textContent = clean;
+        showToast(`Server updated to ${clean}`, 'success');
+      }
+    });
+  }
 
   // Tab Switching
   tabLogin.addEventListener('click', () => {
@@ -392,7 +413,7 @@ async function initMainView() {
 
       if (nameInput) nameInput.value = cfg.userName || '';
       if (emailInput) emailInput.value = cfg.userEmail || '';
-      if (serverInput) serverInput.value = cfg.serverUrl || 'http://localhost:5000';
+      if (serverInput) serverInput.value = cfg.serverUrl || 'https://aivaserve.duckdns.org';
       if (startToggle) startToggle.checked = Boolean(cfg.startWithWindows);
       if (bgToggle) bgToggle.checked = Boolean(cfg.runInBackground);
 
@@ -498,7 +519,7 @@ async function initMainView() {
   // Embedded HUD Loader
   function loadEmbeddedHud(serverUrl) {
     if (!hudFrame) return;
-    const targetUrl = serverUrl || 'http://localhost:5000';
+    const targetUrl = serverUrl || 'https://aivaserve.duckdns.org';
     if (hudLoading) hudLoading.style.display = 'flex';
     if (hudError) hudError.style.display = 'none';
 
