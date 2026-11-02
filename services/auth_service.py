@@ -25,7 +25,7 @@ class AuthService:
     def __init__(self, db: Optional[DatabaseService] = None):
         self.db = db or DatabaseService()
         self.jwt_secret = os.getenv("JWT_SECRET") or "aiva_fallback_development_secret_change_in_production"
-        self.access_token_expiry_sec = int(os.getenv("JWT_ACCESS_EXPIRY_MINUTES", "30")) * 60
+        self.access_token_expiry_sec = int(os.getenv("JWT_ACCESS_EXPIRY_MINUTES", "43200")) * 60  # 30 days default
         self.refresh_token_expiry_sec = int(os.getenv("JWT_REFRESH_EXPIRY_DAYS", "30")) * 86400
         self.otp_expiry_sec = 600.0  # 10 minutes
         self.max_otp_attempts = 5

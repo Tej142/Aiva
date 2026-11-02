@@ -320,11 +320,73 @@ function setupIpcHandlers() {
   });
 
   // Auth: Logout (Clears auth tokens and session storage completely)
-    // Auth: Get Tokens for embedded Web HUD SSO
-  ipcMain.handle('auth:getTokens', () => {
+    // Auth: Get Tokens for embedded Web HUD SSO (with automatic background refresh & cookie sync)
+  ipcMain.handle('auth:getTokens', async () => {
+    let accessToken = store.getDecrypted('encryptedAccessToken');
+    let refreshToken = store.getDecrypted('encryptedRefreshToken');
+    const serverUrl = getServerUrl();
+
+    // Check if token expired or about to expire in 60 seconds
+    if (refreshToken) {
+      let isExpired = !accessToken;
+      if (accessToken) {
+        try {
+          const parts = accessToken.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+            if (payload.exp && payload.exp * 1000 < Date.now() + 60000) {
+              isExpired = true;
+            }
+          }
+        } catch {
+          isExpired = true;
+        }
+      }
+
+      if (isExpired) {
+        try {
+          const resp = await fetch(`${serverUrl}/api/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken })
+          });
+          const data = await resp.json();
+          if (data.status === 'success' && data.tokens && data.tokens.access_token) {
+            accessToken = data.tokens.access_token;
+            store.setEncrypted('encryptedAccessToken', accessToken);
+            if (data.tokens.refresh_token) {
+              refreshToken = data.tokens.refresh_token;
+              store.setEncrypted('encryptedRefreshToken', refreshToken);
+            }
+          }
+        } catch (err) {
+          console.warn('[SSO] Token refresh failed:', err);
+        }
+      }
+    }
+
+    // Sync cookie into defaultSession so all iframe requests carry aiva_access_token
+    if (accessToken && serverUrl) {
+      try {
+        const u = new URL(serverUrl);
+        await session.defaultSession.cookies.set({
+          url: serverUrl,
+          name: 'aiva_access_token',
+          value: accessToken,
+          domain: u.hostname,
+          path: '/',
+          httpOnly: false,
+          secure: u.protocol === 'https:',
+          sameSite: 'no_restriction'
+        });
+      } catch (cookieErr) {
+        console.warn('[SSO] Cookie sync error:', cookieErr);
+      }
+    }
+
     return {
-      accessToken: store.getDecrypted('encryptedAccessToken'),
-      refreshToken: store.getDecrypted('encryptedRefreshToken')
+      accessToken: accessToken,
+      refreshToken: refreshToken
     };
   });
 

@@ -127,7 +127,44 @@ window.addEventListener('message', (event) => {
 });
 
 function getAccessToken() {
-    return localStorage.getItem('aiva_access_token') || '';
+    let token = localStorage.getItem('aiva_access_token') || '';
+    if (!token && document.cookie) {
+        const m = document.cookie.match(/(?:^|;\s*)aiva_access_token=([^;]+)/);
+        if (m) {
+            token = decodeURIComponent(m[1]);
+            localStorage.setItem('aiva_access_token', token);
+        }
+    }
+    return token;
+}
+
+async function refreshAccessToken() {
+    let refreshToken = localStorage.getItem('aiva_refresh_token');
+    if (!refreshToken && (window.self !== window.top || document.body.classList.contains('is-embedded'))) {
+        try {
+            window.parent.postMessage({ type: 'AIVA_REQUEST_AUTH' }, '*');
+            await new Promise(r => setTimeout(r, 350));
+            refreshToken = localStorage.getItem('aiva_refresh_token');
+        } catch {}
+    }
+    if (!refreshToken) return null;
+    try {
+        const resp = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        if (resp.status === 200) {
+            const data = await resp.json();
+            if (data.tokens && data.tokens.access_token) {
+                setTokens(data.tokens);
+                return data.tokens.access_token;
+            }
+        }
+    } catch (e) {
+        console.warn('Silent token refresh failed:', e);
+    }
+    return null;
 }
 
 function setTokens(tokens) {
@@ -580,11 +617,22 @@ async function sendUserMessage(query) {
     appendChatMessage('aiva', '<div class="typing-dots"><span></span><span></span><span></span></div>', tempMsgId);
 
     try {
-        const response = await fetch('/api/chat', {
+        let response = await fetch('/api/chat', {
             method: 'POST',
             headers: authHeaders(),
             body: JSON.stringify({ message: query })
         });
+
+        if (response.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+                response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ message: query })
+                });
+            }
+        }
 
         if (response.status === 401) {
             removeTempMessage(tempMsgId);

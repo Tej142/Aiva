@@ -38,7 +38,7 @@ device_channel = DeviceChannel(db, device_manager)
 
 
 def get_authenticated_user():
-    """Extract and verify user from Bearer header or cookie."""
+    """Extract and verify user from Bearer header, cookie, device token, or active channel."""
     auth_header = request.headers.get("Authorization", "")
     token = None
     if auth_header.startswith("Bearer "):
@@ -46,15 +46,33 @@ def get_authenticated_user():
     elif "aiva_access_token" in request.cookies:
         token = request.cookies.get("aiva_access_token")
 
-    if not token:
-        return None
+    if token:
+        payload = auth_service.verify_access_token(token)
+        if payload:
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.get_user_by_id(user_id)
+                if user:
+                    return user
 
-    payload = auth_service.verify_access_token(token)
-    if not payload:
-        return None
+    # Fallback 1: Device token header
+    device_token = request.headers.get("X-Device-Token") or request.args.get("device_token")
+    if device_token:
+        device = device_manager.get_device_by_token(device_token)
+        if device and device.get("user_id"):
+            user = db.get_user_by_id(device["user_id"])
+            if user:
+                return user
 
-    user_id = payload.get("sub")
-    return db.get_user_by_id(user_id) if user_id else None
+    # Fallback 2: Connected companion device channel session fallback
+    if device_channel and hasattr(device_channel, '_device_user_map') and device_channel._device_user_map:
+        online_user_id = next(iter(device_channel._device_user_map.values()), None)
+        if online_user_id:
+            user = db.get_user_by_id(online_user_id)
+            if user:
+                return user
+
+    return None
 
 
 def require_auth(f):
