@@ -7,6 +7,12 @@ const PermissionsManager = require('./permissions');
 const DeviceActionExecutor = require('./executor');
 const DeviceWebSocketClient = require('./ws-client');
 
+// Enforce single instance lock to prevent duplicate processes from fighting over the WebSocket
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
+
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
@@ -620,6 +626,14 @@ app.whenReady().then(() => {
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
   if (deviceToken) {
     wsClient.connect();
+  }
+});
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   }
 });
 
