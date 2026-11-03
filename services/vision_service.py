@@ -124,6 +124,8 @@ class VisionService:
     def image_to_bytes(self, image: Image.Image, format: str = "JPEG") -> bytes:
         """Converts PIL Image to bytes."""
         buffer = io.BytesIO()
+        if format.upper() in ("JPEG", "JPG") and image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
         image.save(buffer, format=format, quality=85)
         return buffer.getvalue()
 

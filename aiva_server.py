@@ -208,8 +208,21 @@ def api_chat():
     uid_log = auth_user["id"]
     print(f"\n[Web UI Chat Query]: {msg} (User: {uid_log})")
     try:
+        result = None
+        # Fast direct execution for screen inspection queries
+        if any(w in msg.lower() for w in ["screen", "screenshot", "what is on my screen", "inspect screen"]) and kernel and hasattr(kernel, "capabilities"):
+            inspect_handler = kernel.capabilities.get("inspect_screen")
+            if inspect_handler:
+                try:
+                    v_res = run_async(inspect_handler({"query": msg, "user_id": auth_user["id"]}), timeout=15.0)
+                    if v_res and v_res.get("analysis"):
+                        result = {"response": v_res["analysis"], "route": "vision"}
+                except Exception as v_err:
+                    print(f"[VisionDirect Error]: {v_err}")
+
         # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
-        result = run_async(kernel.input_handler.process_query(msg, speak=False))
+        if not result:
+            result = run_async(kernel.input_handler.process_query(msg, speak=False))
         
         reply_text = result.get("response", "Done.")
         response_data = {
