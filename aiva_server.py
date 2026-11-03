@@ -848,7 +848,8 @@ def start_kernel_background():
     global kernel, kernel_loop
     kernel_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(kernel_loop)
-    kernel = AIVAKernel()
+    kernel = AIVAKernel(db=db, device_manager=device_manager, device_channel=device_channel)
+    kernel.device_channel = device_channel
     device_channel.set_event_loop(kernel_loop)
 
     # Attach primary user if available

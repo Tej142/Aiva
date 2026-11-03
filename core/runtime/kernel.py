@@ -91,7 +91,7 @@ from services.web_automation_service import (
 
 class AIVAKernel:
 
-    def __init__(self):
+    def __init__(self, db=None, device_manager=None, device_channel=None):
 
         self.running = False
 
@@ -116,9 +116,9 @@ class AIVAKernel:
         from services.device_manager import DeviceManager
         from services.device_channel import DeviceChannel
 
-        self.db = DatabaseService()
-        self.device_manager = DeviceManager(self.db)
-        self.device_channel = DeviceChannel(self.db, self.device_manager)
+        self.db = db or DatabaseService()
+        self.device_manager = device_manager or DeviceManager(self.db)
+        self.device_channel = device_channel or DeviceChannel(self.db, self.device_manager)
         self.active_user_id = None
 
         # =====================================
@@ -589,6 +589,8 @@ class AIVAKernel:
 
         def _get_active_uid(action_dict):
             uid = action_dict.get("user_id") or getattr(self, "active_user_id", None)
+            if not uid and self.device_channel and hasattr(self.device_channel, '_device_user_map') and self.device_channel._device_user_map:
+                uid = next(iter(self.device_channel._device_user_map.values()), None)
             if not uid:
                 primary = self.db.get_primary_user()
                 if primary:

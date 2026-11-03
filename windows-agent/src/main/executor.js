@@ -87,9 +87,9 @@ class DeviceActionExecutor {
 
         case 'open_app': {
           const appQuery = (params.app_name || '').toLowerCase().trim();
-          const exeName = this.allowedApps[appQuery];
+          const exeName = this.allowedApps[appQuery] || (appQuery + '.exe');
 
-          if (!exeName) {
+          if (!this.allowedApps[appQuery] && !['chrome', 'notepad', 'calc', 'msedge', 'code'].includes(appQuery)) {
             return {
               status: 'error',
               output: {
@@ -98,12 +98,19 @@ class DeviceActionExecutor {
             };
           }
 
-          // Non-blocking spawn without cmd shell wrapper
-          const child = spawn(exeName, [], {
-            detached: true,
-            stdio: 'ignore'
-          });
-          child.unref();
+          try {
+            await this._runPowerShell(`Start-Process "${exeName}"`);
+          } catch (e) {
+            try {
+              const child = spawn('cmd.exe', ['/c', 'start', '', exeName], { detached: true, stdio: 'ignore' });
+              child.unref();
+            } catch (spawnErr) {
+              return {
+                status: 'error',
+                output: { message: `Failed to open ${appQuery}: ${spawnErr.message}` }
+              };
+            }
+          }
 
           return {
             status: 'success',
