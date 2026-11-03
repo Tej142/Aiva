@@ -5,8 +5,15 @@
 
 // Toast Notification Engine
 function showToast(message, type = 'info') {
+  if (!message || typeof message !== 'string' || message.includes('undefined')) return;
   const container = document.getElementById('toast-root');
   if (!container) return;
+
+  // Deduplicate active toasts
+  const existing = Array.from(container.children);
+  if (existing.some(t => t.textContent.replace(/\s+/g, ' ').trim() === message.replace(/\s+/g, ' ').trim())) {
+    return;
+  }
 
   const toast = document.createElement('div');
   toast.className = 'toast';
@@ -785,11 +792,17 @@ async function initMainView() {
   });
 
   window.aivaAgent.onActivityLog((item) => {
+    if (!item) return;
     activityCache.push(item);
     if (currentTab === 'view-activity') {
       renderActivityTable();
     }
-    showToast(`Action: ${item.action} (${item.status})`, item.status === 'success' ? 'success' : 'info');
+    if (item.type === 'command_result' && item.action) {
+      const actionName = item.action.replace(/_/g, ' ');
+      const title = actionName.charAt(0).toUpperCase() + actionName.slice(1);
+      const isSuccess = item.status === 'success';
+      showToast(`${title} ${isSuccess ? 'completed' : 'failed'}`, isSuccess ? 'success' : 'error');
+    }
   });
 
   // Initial load

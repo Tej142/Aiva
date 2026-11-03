@@ -35,9 +35,11 @@ contextBridge.exposeInMainWorld('aivaAgent', {
 
   // Event Listeners
   onStatusChange: (callback) => {
+    ipcRenderer.removeAllListeners('device:status');
     ipcRenderer.on('device:status', (_event, data) => callback(data));
   },
   onActivityLog: (callback) => {
+    ipcRenderer.removeAllListeners('device:activity');
     ipcRenderer.on('device:activity', (_event, data) => callback(data));
   }
 });
