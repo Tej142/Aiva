@@ -24,14 +24,17 @@ class PermissionsManager {
     } catch (e) {
       console.error('[Permissions] Failed to read permissions config:', e);
     }
-    // SECURE DEFAULTS: Dangerous capabilities OFF by default
+    // Sane assistant defaults: desktop productivity enabled, power lock guarded
     return {
+      open_apps: true,
       open_apps_urls: true,
       media_volume: true,
-      keyboard_input: false,
-      files: false,
-      screenshot: false,
-      system_power: false
+      keyboard_input: true,
+      files: true,
+      file_access: true,
+      screenshot: true,
+      system_power: false,
+      power_control: false
     };
   }
 
@@ -48,18 +51,27 @@ class PermissionsManager {
   }
 
   set(key, value) {
-    if (this.permissions.hasOwnProperty(key)) {
-      this.permissions[key] = Boolean(value);
-      this._save();
-    }
+    const bVal = Boolean(value);
+    this.permissions[key] = bVal;
+    if (key === 'open_apps') this.permissions.open_apps_urls = bVal;
+    if (key === 'open_apps_urls') this.permissions.open_apps = bVal;
+    if (key === 'files') this.permissions.file_access = bVal;
+    if (key === 'file_access') this.permissions.files = bVal;
+    if (key === 'system_power') this.permissions.power_control = bVal;
+    if (key === 'power_control') this.permissions.system_power = bVal;
+    this._save();
   }
 
   setAll(newPerms) {
-    for (const key of Object.keys(this.permissions)) {
-      if (newPerms.hasOwnProperty(key)) {
-        this.permissions[key] = Boolean(newPerms[key]);
-      }
+    for (const key of Object.keys(newPerms)) {
+      this.permissions[key] = Boolean(newPerms[key]);
     }
+    if (newPerms.open_apps !== undefined) this.permissions.open_apps_urls = Boolean(newPerms.open_apps);
+    if (newPerms.open_apps_urls !== undefined) this.permissions.open_apps = Boolean(newPerms.open_apps_urls);
+    if (newPerms.file_access !== undefined) this.permissions.files = Boolean(newPerms.file_access);
+    if (newPerms.files !== undefined) this.permissions.file_access = Boolean(newPerms.files);
+    if (newPerms.power_control !== undefined) this.permissions.system_power = Boolean(newPerms.power_control);
+    if (newPerms.system_power !== undefined) this.permissions.power_control = Boolean(newPerms.system_power);
     this._save();
   }
 
@@ -69,30 +81,30 @@ class PermissionsManager {
       case 'open_app':
       case 'list_running_apps':
       case 'close_app':
-        return this.permissions.open_apps_urls;
+        return Boolean(this.permissions.open_apps ?? this.permissions.open_apps_urls ?? true);
 
       case 'media_play_pause':
       case 'media_next':
       case 'media_prev':
       case 'volume_set':
       case 'volume_mute':
-        return this.permissions.media_volume;
+        return Boolean(this.permissions.media_volume ?? true);
 
       case 'type_text':
       case 'press_key':
       case 'hotkey':
-        return this.permissions.keyboard_input;
+        return Boolean(this.permissions.keyboard_input);
 
       case 'screenshot':
-        return this.permissions.screenshot;
+        return Boolean(this.permissions.screenshot);
 
       case 'lock_screen':
       case 'system_power':
-        return this.permissions.system_power;
+        return Boolean(this.permissions.system_power ?? this.permissions.power_control);
 
       case 'open_file':
       case 'open_folder':
-        return this.permissions.files;
+        return Boolean(this.permissions.files ?? this.permissions.file_access);
 
       default:
         return false;

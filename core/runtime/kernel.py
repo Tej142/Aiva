@@ -916,6 +916,25 @@ class AIVAKernel:
         async def inspect_screen_action(action):
             params = action.get("parameters", {})
             query = params.get("query") or params.get("question") or action.get("query", "Describe what is currently visible on the screen.")
+            uid = _get_active_uid(action)
+            if uid and self.device_channel.get_online_devices_for_user(uid):
+                try:
+                    sc_res = await self.device_channel.dispatch_command(
+                        user_id=uid,
+                        action="screenshot",
+                        params={},
+                        target_device_name=action.get("device_name")
+                    )
+                    if sc_res.get("status") == "success" and "screenshot_base64" in sc_res.get("output", {}):
+                        import base64
+                        raw_data = base64.b64decode(sc_res["output"]["screenshot_base64"])
+                        from core.shared.config_loader import ensure_dir
+                        sc_dir = ensure_dir("storage")
+                        sc_path = os.path.join(sc_dir, "last_screenshot.png")
+                        with open(sc_path, "wb") as f:
+                            f.write(raw_data)
+                except Exception as sc_err:
+                    print(f"[InspectScreen] Error fetching screenshot from device: {sc_err}")
             res = await vision_controller.inspect_screen(query)
             analysis = res.get("analysis", "")
             print(f"[VisionController] Screen analysis: {analysis}")

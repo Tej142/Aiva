@@ -16,16 +16,25 @@ class DeviceActionExecutor {
       calc: 'calc.exe',
       calculator: 'calc.exe',
       chrome: 'chrome.exe',
+      'google chrome': 'chrome.exe',
+      browser: 'chrome.exe',
       edge: 'msedge.exe',
       msedge: 'msedge.exe',
+      'microsoft edge': 'msedge.exe',
       vscode: 'code.cmd',
       code: 'code.cmd',
+      'visual studio code': 'code.cmd',
       explorer: 'explorer.exe',
       paint: 'mspaint.exe',
       mspaint: 'mspaint.exe',
       taskmgr: 'taskmgr.exe',
       cmd: 'cmd.exe',
-      powershell: 'powershell.exe'
+      terminal: 'wt.exe',
+      powershell: 'powershell.exe',
+      spotify: 'spotify.exe',
+      'apple music': 'mswindowsmusic:',
+      applemusic: 'mswindowsmusic:',
+      music: 'mswindowsmusic:'
     };
   }
 

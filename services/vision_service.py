@@ -135,7 +135,14 @@ class VisionService:
             return {"status": "error", "message": "No Gemini API keys configured"}
 
         try:
-            screenshot = self.capture_screen()
+            last_sc = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "last_screenshot.png")
+            if os.path.exists(last_sc) and (time.time() - os.path.getmtime(last_sc) < 60):
+                try:
+                    screenshot = Image.open(last_sc)
+                except Exception:
+                    screenshot = self.capture_screen()
+            else:
+                screenshot = self.capture_screen()
             img_bytes = self.image_to_bytes(screenshot, format="JPEG")
 
             prompt = f"""
