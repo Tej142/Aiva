@@ -118,6 +118,25 @@ function updateTrayMenu() {
   tray.setToolTip(`AIVA Device Agent (${currentDeviceStatus.state}${isPaused ? ' - Paused' : ''})`);
 }
 
+async function syncSessionCookie(serverUrl, accessToken) {
+  if (!serverUrl || !accessToken) return;
+  try {
+    const u = new URL(serverUrl);
+    await session.defaultSession.cookies.set({
+      url: serverUrl,
+      name: 'aiva_access_token',
+      value: accessToken,
+      domain: u.hostname,
+      path: '/',
+      httpOnly: false,
+      secure: u.protocol === 'https:',
+      sameSite: 'no_restriction'
+    });
+  } catch (cookieErr) {
+    console.warn('[SSO] Cookie sync error:', cookieErr);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -167,6 +186,11 @@ function createWindow() {
   // Decide initial screen:
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
   if (deviceToken) {
+    const accessToken = store.getDecrypted('encryptedAccessToken');
+    const serverUrl = getServerUrl();
+    if (accessToken && serverUrl) {
+      syncSessionCookie(serverUrl, accessToken);
+    }
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'main.html'));
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'login.html'));

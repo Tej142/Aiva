@@ -209,7 +209,7 @@ def api_chat():
     print(f"\n[Web UI Chat Query]: {msg} (User: {uid_log})")
     try:
         # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
-        result = run_async(kernel.input_handler.process_query(msg, speak=True))
+        result = run_async(kernel.input_handler.process_query(msg, speak=False))
         
         reply_text = result.get("response", "Done.")
         response_data = {

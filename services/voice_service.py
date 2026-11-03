@@ -171,8 +171,11 @@ class VoiceService:
                 else:
                     silence = np.zeros((silence_n, audio_data.shape[1]), dtype=np.float32)
 
-                sd.play(np.concatenate([silence, audio_data], axis=0), samplerate=sr)
-                sd.wait()
+                try:
+                    sd.play(np.concatenate([silence, audio_data], axis=0), samplerate=sr)
+                    sd.wait()
+                except Exception as play_err:
+                    logger.info(f'Local audio playback skipped (headless environment): {play_err}')
                 return
 
             except Exception as e:
