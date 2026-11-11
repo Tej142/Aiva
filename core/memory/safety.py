@@ -360,14 +360,15 @@ _CALL_ME_SET_RE = re.compile(
     re.IGNORECASE,
 )
 _CALL_ME_RESET_RE = re.compile(
-    r"^(?:please\s+)?(?:reset|clear|remove|forget)\s+(?:my\s+)?preferred\s+name\b|"
-    r"^(?:please\s+)?(?:call\s+me\s+by|use)\s+(?:my\s+)?default\s+name\b",
+    r"^(?:please\s+)?(?:reset|clear|remove|forget)\s+(?:my\s+)?(?:preferred\s+name|nickname|display\s+name)\b|"
+    r"^(?:please\s+)?(?:call\s+me\s+by|go\s+back\s+to|use)\s+(?:my\s+)?(?:default|real|actual|original|account|profile)\s+name\b",
     re.IGNORECASE,
 )
 _CALL_ME_NON_NAME_PREFIXES = (
     "back", "later", "soon", "tomorrow", "tonight", "today", "again",
-    "at ", "on ", "in ", "when ", "after ", "before ", "every ", "if ",
-    "there", "here", "now", "maybe", "first", "next", "a ", "an ", "the ",
+    "at ", "on ", "in ", "by ", "with ", "when ", "after ", "before ",
+    "every ", "if ", "there", "here", "now", "maybe", "first", "next",
+    "a ", "an ", "the ",
 )
 
 
