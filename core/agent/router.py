@@ -176,7 +176,9 @@ class TieredRouter:
             m_open = _OPEN_APP_RE.match(low)
             if m_open:
                 target = m_open.group(1).strip()
-                if not any(bad in target for bad in ("browser for", "file ", "folder ", "document ", "settings", "whatsapp chat")):
+                if target not in {"that", "this", "it", "one", "something", "them"} and not any(
+                    bad in target for bad in ("browser for", "file ", "folder ", "document ", "settings", "whatsapp chat")
+                ):
                     if target in _URL_ALIASES:
                         return _finish(RouteDecision(
                             tier=0, rule_name="open_known_site", tool_name="open_apps_urls", tool_args={"url": _URL_ALIASES[target]}, tag_hint="action"
