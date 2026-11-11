@@ -265,6 +265,7 @@ class MemoryEngine:
         user_id: Optional[str],
         text: str,
         channel: str = Channel.HUD.value,
+        explicit_only: bool = False,
     ) -> Dict[str, Any]:
         """Handle remember, remind me, snooze, forget, what do you know, settings toggles."""
         t0 = time.perf_counter()
@@ -475,6 +476,9 @@ class MemoryEngine:
                 "route": "memory",
                 "response": f"What I know about {subject}:\n- " + "\n- ".join(lines[:6]),
             }
+
+        if explicit_only:
+            return {"handled": False}
 
         # 10. General recall query routed to `memory` intent
         recalled = self.recall(user_id, raw, top_k=5)

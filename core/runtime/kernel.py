@@ -936,6 +936,34 @@ class AIVAKernel:
 
         self.input_handler.voice_service = self.voice_service
 
+        # Initialize Phase 1 Agent Core (always wired; routed via AIVA_AGENT_CORE flag)
+        from core.agent.llm_gateway import LLMGateway
+        from core.agent.orchestrator import AgentOrchestrator
+        from core.agent.telemetry import TelemetryRecorder
+        from core.agent.tools.builtin import register_builtin_tools
+        from core.agent.tools.registry import ToolRegistry
+
+        self.telemetry = TelemetryRecorder(self.db)
+        self.tool_registry = ToolRegistry()
+        register_builtin_tools(
+            self.tool_registry,
+            kernel=self,
+            capability_registry=self.capabilities,
+            research_agent=self.research_agent,
+            whatsapp_service=self.whatsapp_service,
+            memory_engine=self.memory_engine,
+            db=self.db,
+        )
+        self.llm_gateway = LLMGateway()
+        self.agent_orchestrator = AgentOrchestrator(
+            registry=self.tool_registry,
+            llm_gateway=self.llm_gateway,
+            memory_engine=self.memory_engine,
+            telemetry=self.telemetry,
+            task_pattern_service=self.task_pattern_service,
+        )
+        self.input_handler.agent_orchestrator = self.agent_orchestrator
+
         # =====================================
         # REGISTER AGENTS
         # =====================================

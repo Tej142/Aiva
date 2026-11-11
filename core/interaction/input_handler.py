@@ -1,6 +1,7 @@
 """Unified interaction pipeline routing user turns across MemoryEngine, LLM, and Planner."""
 
 from typing import Callable, Optional
+from core.agent import is_agent_core_enabled
 
 
 class InputHandler:
@@ -22,6 +23,7 @@ class InputHandler:
         self.get_active_user_id = get_active_user_id
         self.voice_service = None
         self.pending_confirmation = None
+        self.agent_orchestrator = None
 
     def _resolve_uid(self, user_id: Optional[str]) -> Optional[str]:
         if user_id:
@@ -56,6 +58,19 @@ class InputHandler:
                 "should_end_session": True,
                 "route": "exit",
             }
+
+        # Feature-flagged Phase 1 Agent Core orchestrator path (default off until golden eval passes)
+        if self.agent_orchestrator is not None and is_agent_core_enabled():
+            res = await self.agent_orchestrator.handle_turn(
+                user_input,
+                user_id=uid,
+                channel=channel,
+                session_id=session_id,
+            )
+            spoken = res.get("speech_text") or res.get("response") or ""
+            if speak and spoken and self.voice_service:
+                await self.voice_service.speak(spoken)
+            return res
 
         # =====================================
         # VOICE CONFIRMATION FOR DESTRUCTIVE ACTIONS

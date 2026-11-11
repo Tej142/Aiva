@@ -726,14 +726,20 @@ class WhatsAppService:
                 await _reply_sender(reply)
                 return {"status": "power_confirmation_requested"}
 
-        # 10. Compound Command 1: "message <contact> <text>"
-        # e.g. "message dad to come early this evening", "message dad please come early"
+        from core.agent import is_agent_core_enabled
+        use_agent_core = bool(
+            is_agent_core_enabled()
+            and self.kernel is not None
+            and getattr(self.kernel, "agent_orchestrator", None) is not None
+        )
+
+        # 10. Compound Command 1 (legacy fallback when AIVA_AGENT_CORE=0)
         msg_match = re.match(
             r"^(?:message|send a message to|text|tell)\s+([a-zA-Z0-9\s]+?)\s+(?:to\s+|that\s+|saying\s+|:)?\s*(.+)$",
             text,
             re.IGNORECASE
         )
-        if msg_match and not any(k in lower_text for k in ["search", "find", "research"]):
+        if not use_agent_core and msg_match and not any(k in lower_text for k in ["search", "find", "research"]):
             target_name = msg_match.group(1).strip()
             msg_content = msg_match.group(2).strip()
 
@@ -762,7 +768,7 @@ class WhatsAppService:
             text,
             re.IGNORECASE
         )
-        if compound_search_match:
+        if not use_agent_core and compound_search_match:
             search_query = compound_search_match.group(1).strip()
             dest_target = compound_search_match.group(2).strip()
 
