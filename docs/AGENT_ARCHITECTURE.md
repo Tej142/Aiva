@@ -1,11 +1,11 @@
-# AIVA Phase 1 Agent Architecture
+# AIVA Phase 1 & Phase 2 Agent Architecture
 
-> **Status:** Implemented behind `AIVA_AGENT_CORE` (default `0`, safe rollout)  
+> **Status:** Implemented behind `AIVA_AGENT_CORE` (live-ready cutover `AIVA_AGENT_CORE=1`; instant rollback `AIVA_AGENT_CORE=0`)  
 > **Updated:** 2026-11-11
 
 ## 1. Overview & Request Lifecycle
 
-Phase 1 upgrades AIVA from regex/pattern-heavy dispatch (`core/interaction/input_handler.py`) to a typed, policy-enforced, streaming-first **Agent Core** (`core/agent/`) while keeping backward compatibility behind the `AIVA_AGENT_CORE` feature flag.
+Phase 1 upgrades AIVA from regex/pattern-heavy dispatch (`core/interaction/input_handler.py`) to a typed, policy-enforced, streaming-first **Agent Core** (`core/agent/`) while keeping backward compatibility behind the `AIVA_AGENT_CORE` feature flag. Phase 2 extends the registry and Baileys WhatsApp subsystem with private, FTS5-indexed **WhatsApp message reading & searching** (`whatsapp_read`, `whatsapp_search`).
 
 ```text
 User Turn (HUD / Voice / WhatsApp)
@@ -35,13 +35,16 @@ User Turn (HUD / Voice / WhatsApp)
 
 ### A. Agent Core (`core/agent/`)
 - **`orchestrator.py` (`AgentOrchestrator`):** Runs the bounded tool loop (`MAX_STEPS = 6`, `PER_STEP_TIMEOUT_S = 20.0`, `TOTAL_TIMEOUT_S = 55.0`), executes `parallel_safe` tool batches concurrently via `asyncio.gather`, maintains per-`(user_id, session_id)` confirmation slots, compacts verbose tool outputs into `ref_id` working-memory references, and derives telemetry `tag` from actual tool calls.
-- **`llm_gateway.py` (`LLMGateway`):** Unified async client over Groq (7 keys), Gemini (5 keys), and Mistral (5 keys) with automatic key rotation on `429`/auth errors, cross-provider failover, native OpenAI-style tool calls + JSON fallback parser (`_extract_json_tool_calls`), and token delta streaming.
+- **`llm_gateway.py` (`LLMGateway`):** Unified async client over Groq (7 keys), Gemini (5 keys), and Mistral (5 keys) with `AsyncGroq(..., max_retries=0)` fast key rotation, 404 model fallback (`_is_model_unavailable_error`), `reasoning_effort="low"` on Tier 1 `openai/gpt-oss-20b` (`qwen/qwen3.8-27b` fallback), Tier 2 Gemini pools (`gemini-3-flash-preview`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite`), Tier 2 Groq fallback (`openai/gpt-oss-120b`), native OpenAI-style tool calls + JSON fallback parser (`_extract_json_tool_calls`), and first-token/tool-call delta streaming.
 - **`router.py` (`TieredRouter`):** Strictly capped (`TIER0_MAX_RULES = 15`, currently `RULE_COUNT = 9`) for sub-10ms deterministic single-step actions while excluding compound clauses (`and`, `then`) and ambiguous pronouns (`open that`, `open it`). Escalates deep research, multi-clause tasks (`>= 3`), and browser workflows directly to Tier 2.
 
 ### B. Typed Tool Registry & Risk Policy (`core/agent/tools/`, `core/agent/policy.py`)
 - **`ToolRegistry` & `ToolSpec` (`core/agent/tools/registry.py`):** JSON Schema validation (`ToolValidationError`), per-channel allowlists (`hud`, `voice`, `whatsapp`), timeouts, and preflight resolution.
-- **Built-in Tools (`core/agent/tools/builtin.py`):** `open_apps_urls`, `media_volume`, `keyboard_input`, `screenshot`, `power_control` (`hud`/`voice` only), `file_access`, `web_research` (`untrusted_result=True`), `browser_actions` (`untrusted_result=True`), `whatsapp_lookup_contact`, `whatsapp_send` (resolves `second number` / `is_self`, checks ambiguity & recipient trust), `recall`, `create_reminder`, and `escalate`.
-- **Phase 2 Ready Slots:** Plain tool registration allows adding `whatsapp_read` and `whatsapp_search` directly onto `registry` with `untrusted_result=True` and scoped `user_id` DB/bridge handlers without modifying `AgentOrchestrator`.
+- **Built-in Tools (15 tools, `core/agent/tools/builtin.py`):** `open_apps_urls`, `media_volume`, `keyboard_input`, `screenshot`, `power_control` (`hud`/`voice` only), `file_access`, `web_research` (`untrusted_result=True`), `browser_actions` (`untrusted_result=True`), `whatsapp_lookup_contact`, `whatsapp_send` (resolves `second number` / `is_self`, checks ambiguity & recipient trust), `whatsapp_read` (`RISK_READ`, `untrusted_result=True`, unread/hours/contact filter, ambiguity disambiguation, masked numbers), `whatsapp_search` (`RISK_READ`, `untrusted_result=True`, FTS5 + `LIKE` search across saved & unsaved chats), `recall`, `create_reminder`, and `escalate`.
+- **Phase 2 Private WhatsApp Archival & HUD Inbox:**
+  - `DatabaseService` maintains per-`user_id` isolated `whatsapp_messages` + `whatsapp_messages_fts` (`wa_msg_ai`/`ad`/`au` triggers) with deduplication (`idx_wa_msg_user_waid`) and masked phone numbers.
+  - `services/whatsapp-bridge/index.js` archives outbound phone messages (`fromMe`), history sync replays (`'append'` / `messaging-history.set`), and `@lid` resolved peer JIDs via loopback `POST /internal/whatsapp/archive` (`X-Bridge-Secret`). Saved-contact inbound messages directly to the AIVA number archive silently as `archived_contact_message`.
+  - Authenticated HUD endpoints `GET /api/whatsapp/messages` and `POST /api/whatsapp/messages/read` power the **Recent WhatsApp Messages** search/filter card in `ui/index.html` (`tokens.css` variables only).
 - **Policy & Untrusted Fencing (`core/agent/policy.py`):**
   - `read`: runs freely.
   - `low`: runs directly with concise confirmation/feedback (trusted WhatsApp contacts, app launches).
@@ -92,12 +95,13 @@ The Phase 1 orchestrator is gated by `AIVA_AGENT_CORE`:
 
 ## 5. Golden Evaluation Suite
 
-- Dataset: `tests/eval/golden_commands.yaml` (`112` labeled commands across 11 categories: device control, trusted WhatsApp, ambiguous/unknown/non-trusted WhatsApp, `search + send`, identity/greeting regression, conversation/memory/reminders, research + sources, multi-step/browser/docs, Telugu/Tanglish bilingual, vague clarification, and adversarial injection/channel-isolation safety).
+- Dataset: `tests/eval/golden_commands.yaml` (`129` labeled commands across 12 categories: device control, trusted WhatsApp, ambiguous/unknown/non-trusted WhatsApp, `search + send`, identity/greeting regression, conversation/memory/reminders, research + sources, multi-step/browser/docs, Telugu/Tanglish bilingual, vague clarification, adversarial injection/channel-isolation safety, and Phase 2 WhatsApp read & search).
 - Runner: `scripts/run_eval.py`
   ```bash
   # Fast deterministic CI mode (stubbed LLM, real Orchestrator + Policy + Memory + SQLite)
   python scripts/run_eval.py --min-accuracy 0.90
 
-  # Opt-in live LLM gateway benchmark
-  python scripts/run_eval.py --live --min-accuracy 0.90
+  # Opt-in live LLM gateway benchmark (with stratified sampling & rate-limit pacing)
+  python scripts/run_eval.py --live --limit 25 --delay-ms 350 --min-accuracy 0.85
   ```
+

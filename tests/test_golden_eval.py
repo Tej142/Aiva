@@ -31,3 +31,4 @@ class TestGoldenEval(unittest.TestCase):
                 0.85,
                 f"Category '{cat}' below 85%: {stats}",
             )
+

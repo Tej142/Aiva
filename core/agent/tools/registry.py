@@ -209,3 +209,4 @@ class ToolRegistry:
                 "error": type(err).__name__,
                 "message": f"Failed running '{name}': {err}",
             }
+

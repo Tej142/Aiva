@@ -1,0 +1,24 @@
+{
+  "name": "aiva-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "AIVA WhatsApp Linked Device Bridge powered by Baileys",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node patch-baileys.js",
+    "start": "node index.js",
+    "pair": "node pair.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "10.0.1",
+    "@whiskeysockets/baileys": "6.7.9",
+    "dotenv": "16.4.7",
+    "pino": "9.6.0",
+    "pino-pretty": "13.0.0",
+    "qrcode-terminal": "0.12.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+

@@ -7,6 +7,7 @@ import random
 import re
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
@@ -189,6 +190,16 @@ class WhatsAppService:
     # ─────────────────────────────────────────────────────────────
     # STATUS & LINKING
     # ─────────────────────────────────────────────────────────────
+    def _resolve_bridge_owner_id(self) -> Optional[str]:
+        """Resolve the user_id that owns the paired Baileys WhatsApp bridge."""
+        if not WHATSAPP_OWNER_EMAIL or not self.db:
+            return None
+        try:
+            owner = self.db.get_user_by_email(WHATSAPP_OWNER_EMAIL)
+            return owner["id"] if owner and owner.get("id") else None
+        except Exception:
+            return None
+
     def is_bridge_owner(self, user: Optional[Dict[str, Any]]) -> bool:
         """True if the user is authorized to manage Baileys bridge-level pairing."""
         if not user or not user.get("id"):
@@ -451,6 +462,21 @@ class WhatsAppService:
             if user_id:
                 self.record_outbound_send(user_id)
                 self.db.log_whatsapp_event(user_id, "outbound", "send", "ok", duration_ms)
+                try:
+                    self.db.store_whatsapp_message(
+                        user_id,
+                        chat_jid=target_jid,
+                        peer_phone=phone,
+                        sender_phone=AIVA_WHATSAPP_NUMBER or phone,
+                        direction="outbound",
+                        text=clean_text,
+                        media_type="text",
+                        wa_message_id=str((bridge_resp or {}).get("messageId") or ""),
+                        is_read=True,
+                        msg_timestamp=time.time(),
+                    )
+                except Exception:
+                    pass
 
             logger.info(
                 f"[WhatsApp] stage=send to={mask_phone(phone)} duration_ms={duration_ms:.1f} status=ok"
@@ -495,6 +521,228 @@ class WhatsAppService:
             "matches": matches,
             "message": f"Found multiple contacts matching '{query}': {', '.join(names)}. Which one did you mean?"
         }
+
+    # ─────────────────────────────────────────────────────────────
+    # PHASE 2: MESSAGE ARCHIVING, READING & SEARCHING
+    # ─────────────────────────────────────────────────────────────
+    @staticmethod
+    def _format_message_record(row: Dict[str, Any]) -> Dict[str, Any]:
+        peer_phone = str(row.get("peer_phone") or "")
+        masked = mask_phone(peer_phone) if peer_phone else "****"
+        ts = float(row.get("msg_timestamp") or row.get("created_at") or time.time())
+        ts_iso = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sender_name = str(row.get("peer_name") or "").strip() or masked
+        return {
+            "id": row.get("id", ""),
+            "sender_name": sender_name,
+            "phone_masked": masked,
+            "direction": row.get("direction", "inbound"),
+            "text": row.get("text", ""),
+            "media_type": row.get("media_type", "text"),
+            "is_read": bool(row.get("is_read")),
+            "timestamp": ts,
+            "timestamp_iso": ts_iso,
+        }
+
+    def _resolve_filter_target(self, user_id: str, contact: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        """Resolve optional contact filter into (peer_phone, peer_query, error_or_ambiguous_dict)."""
+        q = (contact or "").strip()
+        if not q:
+            return None, None, None
+
+        resolution = self.resolve_contact(user_id, q)
+        if resolution.get("status") == "ambiguous":
+            safe_matches = [
+                {
+                    "display_name": m.get("display_name", ""),
+                    "phone_masked": mask_phone(m.get("phone_e164", "")),
+                }
+                for m in (resolution.get("matches") or [])
+            ]
+            return None, None, {
+                "status": "ambiguous",
+                "matches": safe_matches,
+                "messages": [],
+                "count": 0,
+                "message": resolution.get("message") or "Multiple contacts matched.",
+            }
+
+        if resolution.get("status") == "found":
+            c = resolution["contact"]
+            return c.get("phone_e164"), None, None
+
+        # Check explicit secondary/self number aliases
+        low = q.lower()
+        if any(tok in low for tok in ("second number", "2nd number", "my other number", "myself", "self")):
+            self_contacts = [c for c in self.db.get_whatsapp_contacts(user_id) if c.get("is_self")]
+            if len(self_contacts) == 1:
+                return self_contacts[0].get("phone_e164"), None, None
+
+        # Fall back to stored peer_name / phone substring for unsaved senders
+        digits = normalize_phone(q)
+        if digits and len(digits) >= 4:
+            return digits, None, None
+        return None, q, None
+
+    def archive_messages(self, items: List[Dict[str, Any]], *, user_id: Optional[str] = None) -> Dict[str, int]:
+        """Archive passive peer/outbound WhatsApp messages under the bridge owner account."""
+        t0 = time.perf_counter()
+        target_uid = user_id or self._resolve_bridge_owner_id()
+        if not target_uid:
+            return {"received": len(items or []), "stored": 0}
+
+        stored = 0
+        for item in (items or []):
+            if not isinstance(item, dict):
+                continue
+            chat_jid = str(item.get("chat_jid") or "").strip()
+            if chat_jid.endswith("@g.us") or chat_jid == "status@broadcast":
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            peer_phone = normalize_phone(item.get("peer_phone") or item.get("sender") or (chat_jid.split("@")[0].split(":")[0] if "@" in chat_jid else ""))
+            if not peer_phone:
+                continue
+            direction = "outbound" if str(item.get("direction") or "").lower() == "outbound" or item.get("from_me") else "inbound"
+            res = self.db.store_whatsapp_message(
+                target_uid,
+                chat_jid=chat_jid or f"{peer_phone}@s.whatsapp.net",
+                peer_phone=peer_phone,
+                peer_name=str(item.get("push_name") or item.get("peer_name") or "").strip(),
+                sender_phone=AIVA_WHATSAPP_NUMBER if direction == "outbound" and AIVA_WHATSAPP_NUMBER else peer_phone,
+                direction=direction,
+                text=text,
+                media_type=str(item.get("media_type") or "text"),
+                wa_message_id=str(item.get("message_id") or ""),
+                is_read=(True if direction == "outbound" else False),
+                msg_timestamp=item.get("timestamp"),
+            )
+            if res:
+                stored += 1
+
+        dur_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            f"[WhatsApp] stage=archive count={len(items or [])} stored={stored} duration_ms={dur_ms:.1f} status=ok"
+        )
+        return {"received": len(items or []), "stored": stored}
+
+    def read_messages(
+        self,
+        user_id: str,
+        *,
+        contact: Optional[str] = None,
+        unread_only: bool = False,
+        hours_back: Optional[int] = None,
+        limit: int = 10,
+        mark_read: bool = False,
+    ) -> Dict[str, Any]:
+        """Read recent stored WhatsApp messages scoped strictly to `user_id`."""
+        t0 = time.perf_counter()
+        if not user_id:
+            return {"status": "error", "error": "unauthenticated", "messages": [], "count": 0}
+
+        peer_phone, peer_query, early = self._resolve_filter_target(user_id, contact)
+        if early is not None:
+            return early
+
+        since_ts = None
+        if hours_back is not None and int(hours_back) > 0:
+            since_ts = time.time() - (int(hours_back) * 3600.0)
+
+        rows = self.db.get_whatsapp_messages(
+            user_id,
+            peer_phone=peer_phone,
+            peer_query=peer_query,
+            unread_only=bool(unread_only),
+            since_ts=since_ts,
+            limit=limit,
+        )
+        formatted = [self._format_message_record(r) for r in rows]
+        if mark_read and formatted:
+            self.db.mark_whatsapp_messages_read(user_id, message_ids=[m["id"] for m in formatted if not m["is_read"]])
+
+        dur_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            f"[WhatsApp] stage=read user={user_id[:8]} count={len(formatted)} duration_ms={dur_ms:.1f} status=ok"
+        )
+        return {
+            "status": "success" if formatted else "empty",
+            "count": len(formatted),
+            "unread_total": self.db.get_whatsapp_unread_count(user_id),
+            "messages": formatted,
+            "message": (
+                f"Found {len(formatted)} WhatsApp message(s)."
+                if formatted
+                else ("No matching WhatsApp messages found." if not contact else f"No recent WhatsApp messages from '{contact}'.")
+            ),
+        }
+
+    def search_messages(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        contact: Optional[str] = None,
+        hours_back: Optional[int] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """Search stored WhatsApp messages by keyword/phrase scoped strictly to `user_id`."""
+        t0 = time.perf_counter()
+        if not user_id:
+            return {"status": "error", "error": "unauthenticated", "messages": [], "count": 0}
+
+        peer_phone, peer_query, early = self._resolve_filter_target(user_id, contact)
+        if early is not None:
+            return early
+
+        since_ts = None
+        if hours_back is not None and int(hours_back) > 0:
+            since_ts = time.time() - (int(hours_back) * 3600.0)
+
+        rows = self.db.search_whatsapp_messages(
+            user_id,
+            query,
+            peer_phone=peer_phone,
+            peer_query=peer_query,
+            since_ts=since_ts,
+            limit=limit,
+        )
+        formatted = [self._format_message_record(r) for r in rows]
+        dur_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            f"[WhatsApp] stage=search user={user_id[:8]} count={len(formatted)} duration_ms={dur_ms:.1f} status=ok"
+        )
+        return {
+            "status": "success" if formatted else "empty",
+            "count": len(formatted),
+            "query": query,
+            "messages": formatted,
+            "message": (
+                f"Found {len(formatted)} matching WhatsApp message(s)."
+                if formatted
+                else f"No WhatsApp messages matched '{query}'."
+            ),
+        }
+
+    def mark_messages_read(
+        self,
+        user_id: str,
+        *,
+        contact: Optional[str] = None,
+        message_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if not user_id:
+            return {"status": "error", "updated": 0}
+        peer_phone = None
+        if contact:
+            res = self.resolve_contact(user_id, contact)
+            if res.get("status") == "found":
+                peer_phone = res["contact"].get("phone_e164")
+        updated = self.db.mark_whatsapp_messages_read(
+            user_id, peer_phone=peer_phone, message_ids=message_ids
+        )
+        return {"status": "success", "updated": updated, "unread_total": self.db.get_whatsapp_unread_count(user_id)}
 
     # ─────────────────────────────────────────────────────────────
     # INBOUND MESSAGE PROCESSING
@@ -589,8 +837,33 @@ class WhatsAppService:
                 to_jid=chat_jid if chat_jid else None
             )
 
-        # 6. Reject unknown / unlinked senders (NO LLM OR TOOLS EXECUTED)
+        # 6. Saved contact inbound archival (don't auto-reply unlinked notice to saved contacts!)
         if not user_id:
+            owner_id = self._resolve_bridge_owner_id()
+            saved_contact = (
+                self.db.find_whatsapp_contact_by_phone(owner_id, sender_phone)
+                if owner_id
+                else None
+            )
+            if owner_id and saved_contact:
+                self.db.store_whatsapp_message(
+                    owner_id,
+                    chat_jid=chat_jid or f"{sender_phone}@s.whatsapp.net",
+                    peer_phone=sender_phone,
+                    peer_name=saved_contact.get("display_name") or str(payload.get("push_name") or "").strip(),
+                    sender_phone=sender_phone,
+                    direction="inbound",
+                    text=text,
+                    media_type=str(payload.get("media_type") or ("audio" if audio_base64 else "text")),
+                    wa_message_id=message_id,
+                    is_read=False,
+                    msg_timestamp=payload.get("timestamp"),
+                )
+                logger.info(
+                    f"[WhatsApp] stage=inbound_archived sender={masked} status=archived_contact_message"
+                )
+                return {"status": "archived_contact_message", "archived": True}
+
             now = time.time()
             last_sent = self._unlinked_notice_ts.get(sender_phone, 0.0)
             if now - last_sent > 3600.0:  # Rate limit polite notice: 1/hr
@@ -609,6 +882,7 @@ class WhatsAppService:
                 "🤖 *AIVA WhatsApp Assistant*\n\n"
                 "• *Tasks & Chat*: Send any question or device instruction.\n"
                 "• *Send a Message*: 'message dad come early this evening'\n"
+                "• *Read & Search Chats*: 'any unread messages from dad?', 'search whatsapp for invoice'\n"
                 "• *Research & Share*: 'search about Tirupati and send details to my second number'\n"
                 "• *Save Contact*: 'save 9876543210 as dad'\n"
                 "• *Add Alias*: 'add alias papa for dad'\n"

@@ -1440,12 +1440,7 @@ def direct_command():
 # =====================================================================
 # WHATSAPP CHANNEL ENDPOINTS
 # =====================================================================
-@app.route("/internal/whatsapp/inbound", methods=["POST"])
-def internal_whatsapp_inbound():
-    """
-    Inbound webhook exclusively for the local Baileys Node bridge.
-    Rejects non-localhost callers and validates X-Bridge-Secret.
-    """
+def _check_internal_bridge_auth():
     client_ip = request.remote_addr or ""
     if client_ip not in ("127.0.0.1", "::1", "localhost"):
         return jsonify({"error": "forbidden", "message": "Localhost only"}), 403
@@ -1457,15 +1452,40 @@ def internal_whatsapp_inbound():
 
     if not kernel or not hasattr(kernel, "whatsapp_service"):
         return jsonify({"error": "service_unavailable", "message": "Kernel WhatsApp service not ready"}), 503
+    return None
+
+
+@app.route("/internal/whatsapp/inbound", methods=["POST"])
+def internal_whatsapp_inbound():
+    """
+    Inbound webhook exclusively for the local Baileys Node bridge.
+    Rejects non-localhost callers and validates X-Bridge-Secret.
+    """
+    err_resp = _check_internal_bridge_auth()
+    if err_resp is not None:
+        return err_resp
 
     payload = request.get_json(silent=True) or {}
-    
+
     if kernel_loop and kernel_loop.is_running():
         asyncio.run_coroutine_threadsafe(kernel.whatsapp_service.handle_inbound(payload), kernel_loop)
     else:
         run_async(kernel.whatsapp_service.handle_inbound(payload))
 
     return jsonify({"status": "received"}), 200
+
+
+@app.route("/internal/whatsapp/archive", methods=["POST"])
+def internal_whatsapp_archive():
+    """Archive outbound/history-synced WhatsApp messages exclusively from local Baileys bridge."""
+    err_resp = _check_internal_bridge_auth()
+    if err_resp is not None:
+        return err_resp
+
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("messages") if isinstance(payload, dict) else []
+    res = kernel.whatsapp_service.archive_messages(list(items or []))
+    return jsonify({"status": "ok", **res}), 200
 
 
 @app.route("/api/whatsapp/status", methods=["GET"])
@@ -1593,6 +1613,59 @@ def api_whatsapp_contact_detail(user, contact_id):
     if not updated:
         return jsonify({"status": "error", "message": "Contact not found"}), 404
     return jsonify({"status": "success", "contact": updated})
+
+
+@app.route("/api/whatsapp/messages", methods=["GET"])
+@require_auth
+def api_whatsapp_messages(user):
+    """Read or search stored WhatsApp messages scoped strictly to authenticated user."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+
+    uid = user["id"]
+    query = (request.args.get("q") or "").strip()
+    contact = (request.args.get("contact") or "").strip() or None
+    unread_only = (request.args.get("unread_only") or "").strip().lower() in ("1", "true", "yes")
+    try:
+        limit = max(1, min(int(request.args.get("limit", 15)), 50))
+    except (TypeError, ValueError):
+        limit = 15
+    try:
+        hb_raw = request.args.get("hours_back")
+        hours_back = max(1, int(hb_raw)) if hb_raw else None
+    except (TypeError, ValueError):
+        hours_back = None
+
+    if query:
+        res = kernel.whatsapp_service.search_messages(
+            uid, query, contact=contact, hours_back=hours_back, limit=limit
+        )
+    else:
+        res = kernel.whatsapp_service.read_messages(
+            uid, contact=contact, unread_only=unread_only, hours_back=hours_back, limit=limit
+        )
+    return jsonify(res)
+
+
+@app.route("/api/whatsapp/messages/read", methods=["POST"])
+@require_auth
+def api_whatsapp_messages_read(user):
+    """Mark stored WhatsApp messages read strictly for authenticated user."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+
+    data = request.json or {}
+    contact = (data.get("contact") or "").strip() or None
+    message_ids = data.get("message_ids")
+    if isinstance(message_ids, list):
+        message_ids = [str(m) for m in message_ids]
+    else:
+        message_ids = None
+
+    res = kernel.whatsapp_service.mark_messages_read(
+        user["id"], contact=contact, message_ids=message_ids
+    )
+    return jsonify(res)
 
 
 @app.route("/health", methods=["GET"])

@@ -552,6 +552,7 @@ function initNavigation() {
             if (targetTab === 'whatsapp-view') {
                 loadWhatsAppStatus();
                 loadWhatsAppContacts();
+                loadWhatsAppMessages();
             }
         });
     });
@@ -2246,6 +2247,54 @@ function initWhatsApp() {
             }
         });
     }
+
+    // Recent WhatsApp Messages toolbar controls
+    const msgSearchBtn = document.getElementById('wa-btn-search-messages');
+    const msgRefreshBtn = document.getElementById('wa-btn-refresh-messages');
+    const msgMarkAllBtn = document.getElementById('wa-btn-mark-all-read');
+    const msgSearchInput = document.getElementById('wa-msg-search-input');
+    const msgContactInput = document.getElementById('wa-msg-contact-input');
+    const msgUnreadChk = document.getElementById('wa-msg-unread-only');
+
+    if (msgSearchBtn) {
+        msgSearchBtn.addEventListener('click', () => loadWhatsAppMessages());
+    }
+    if (msgRefreshBtn) {
+        msgRefreshBtn.addEventListener('click', () => loadWhatsAppMessages());
+    }
+    if (msgUnreadChk) {
+        msgUnreadChk.addEventListener('change', () => loadWhatsAppMessages());
+    }
+    [msgSearchInput, msgContactInput].forEach(inp => {
+        if (inp) {
+            inp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadWhatsAppMessages();
+                }
+            });
+        }
+    });
+    if (msgMarkAllBtn) {
+        msgMarkAllBtn.addEventListener('click', async () => {
+            msgMarkAllBtn.disabled = true;
+            try {
+                const contact = msgContactInput?.value.trim() || null;
+                const res = await fetch('/api/whatsapp/messages/read', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify(contact ? { contact } : {})
+                });
+                if (res.ok) {
+                    loadWhatsAppMessages();
+                }
+            } catch (e) {
+                console.warn('Error marking messages read:', e);
+            } finally {
+                msgMarkAllBtn.disabled = false;
+            }
+        });
+    }
 }
 
 async function loadWhatsAppStatus() {
@@ -2435,5 +2484,104 @@ async function loadWhatsAppContacts() {
 
     } catch (e) {
         console.warn('Error loading WhatsApp contacts:', e);
+    }
+}
+
+async function loadWhatsAppMessages() {
+    const list = document.getElementById('wa-messages-list');
+    const badge = document.getElementById('wa-unread-badge');
+    if (!list) return;
+
+    const q = document.getElementById('wa-msg-search-input')?.value.trim() || '';
+    const contact = document.getElementById('wa-msg-contact-input')?.value.trim() || '';
+    const unreadOnly = Boolean(document.getElementById('wa-msg-unread-only')?.checked);
+
+    const params = new URLSearchParams({ limit: '25' });
+    if (q) params.set('q', q);
+    if (contact) params.set('contact', contact);
+    if (unreadOnly && !q) params.set('unread_only', 'true');
+
+    try {
+        const res = await fetch(`/api/whatsapp/messages?${params.toString()}`, {
+            headers: authHeaders()
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (badge) {
+            const unreadTotal = Number(data.unread_total || 0);
+            badge.textContent = `${unreadTotal} unread`;
+            badge.classList.remove('active', 'connected', 'danger');
+            if (unreadTotal > 0) badge.classList.add('active');
+        }
+
+        if (data.status === 'ambiguous') {
+            const names = (data.matches || []).map(m => m.display_name).filter(Boolean).join(', ');
+            list.innerHTML = `<div class="wa-messages-empty">${escapeWaHtml(data.message || `Multiple contacts match: ${names}`)}</div>`;
+            return;
+        }
+        if (data.status === 'not_found') {
+            list.innerHTML = `<div class="wa-messages-empty">${escapeWaHtml(data.message || 'No matching contact found.')}</div>`;
+            return;
+        }
+
+        const msgs = data.messages || [];
+        list.innerHTML = '';
+        if (msgs.length === 0) {
+            list.innerHTML = `<div class="wa-messages-empty">${escapeWaHtml(data.message || 'No archived WhatsApp messages yet.')}</div>`;
+            return;
+        }
+
+        msgs.forEach(m => {
+            const row = document.createElement('div');
+            row.className = 'wa-message-row' + (m.is_unread ? ' unread' : '');
+
+            const dir = m.direction === 'outbound' ? 'outbound' : 'inbound';
+            const dirLabel = dir === 'outbound' ? 'Sent' : 'Received';
+            const peerTitle = m.peer_name || m.phone_masked || 'Unknown';
+            const unreadTag = m.is_unread
+                ? `<span class="wa-dir-pill unread">Unread</span>`
+                : '';
+            const markBtn = m.is_unread && m.id
+                ? `<button class="wa-btn wa-btn-secondary wa-btn-mark-one" data-msg-id="${escapeWaHtml(m.id)}" type="button">Mark Read</button>`
+                : '';
+
+            row.innerHTML = `
+                <div class="wa-message-meta">
+                    <div class="wa-message-peer">
+                        <strong>${escapeWaHtml(peerTitle)}</strong>
+                        <span class="wa-message-phone">${escapeWaHtml(m.phone_masked || '')}</span>
+                        <span class="wa-dir-pill ${dir}">${dirLabel}</span>
+                        ${unreadTag}
+                    </div>
+                    <div class="wa-message-actions">
+                        <span>${escapeWaHtml(m.timestamp_str || '')}</span>
+                        ${markBtn}
+                    </div>
+                </div>
+                <div class="wa-message-body">${escapeWaHtml(m.text || '')}</div>
+            `;
+            list.appendChild(row);
+        });
+
+        list.querySelectorAll('.wa-btn-mark-one').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const msgId = btn.getAttribute('data-msg-id');
+                if (!msgId) return;
+                btn.disabled = true;
+                try {
+                    const resMark = await fetch('/api/whatsapp/messages/read', {
+                        method: 'POST',
+                        headers: authHeaders(),
+                        body: JSON.stringify({ message_ids: [msgId] })
+                    });
+                    if (resMark.ok) {
+                        loadWhatsAppMessages();
+                    }
+                } catch {}
+            });
+        });
+    } catch (e) {
+        console.warn('Error loading WhatsApp messages:', e);
     }
 }

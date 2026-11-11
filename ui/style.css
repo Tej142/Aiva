@@ -2424,3 +2424,156 @@ body.is-embedded #web-auth-overlay {
     background: var(--border);
     margin: var(--space-1) 0;
 }
+
+/* Phase 2: Recent WhatsApp Messages Card (tokens.css variables only) */
+.wa-messages-card {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.wa-messages-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.wa-messages-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.wa-messages-toolbar {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.wa-messages-toolbar .wa-pair-input {
+    flex: 2 1 220px;
+    background: var(--elevated);
+}
+
+.wa-messages-toolbar .wa-msg-contact-filter {
+    flex: 1 1 160px;
+}
+
+.wa-msg-unread-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    cursor: pointer;
+    user-select: none;
+    padding: 0 var(--space-1);
+}
+
+.wa-messages-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.wa-messages-empty {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-align: center;
+    padding: var(--space-4);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.wa-message-row {
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.wa-message-row.unread {
+    border-color: var(--accent);
+}
+
+.wa-message-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: var(--text-xs);
+}
+
+.wa-message-peer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    color: var(--text);
+}
+
+.wa-message-phone {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.wa-dir-pill {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    background: var(--surface);
+}
+
+.wa-dir-pill.inbound {
+    background: var(--status-info-bg);
+    border-color: var(--info);
+    color: var(--info);
+}
+
+.wa-dir-pill.outbound {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+    color: var(--accent-light);
+}
+
+.wa-dir-pill.unread {
+    background: var(--status-warning-bg);
+    border-color: var(--warning);
+    color: var(--warning);
+}
+
+.wa-message-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-muted);
+}
+
+.wa-message-body {
+    font-size: var(--text-sm);
+    color: var(--text);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

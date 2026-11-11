@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -230,6 +231,7 @@ class DatabaseService:
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_user ON agent_telemetry(user_id);
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_created ON agent_telemetry(created_at);
         """)
+        self._ensure_whatsapp_messages_schema(cursor)
         conn.commit()
 
     def _migrate_schema(self):
@@ -308,8 +310,61 @@ class DatabaseService:
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_user ON agent_telemetry(user_id);
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_created ON agent_telemetry(created_at);
         """)
-
+        self._ensure_whatsapp_messages_schema(cursor)
         conn.commit()
+
+    def _ensure_whatsapp_messages_schema(self, cursor: sqlite3.Cursor) -> None:
+        """Create per-user WhatsApp message store and FTS5 search index idempotently."""
+        cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS whatsapp_messages (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            wa_message_id TEXT,
+            chat_jid TEXT NOT NULL,
+            peer_phone TEXT NOT NULL,
+            peer_name TEXT NOT NULL DEFAULT '',
+            sender_phone TEXT NOT NULL DEFAULT '',
+            direction TEXT NOT NULL DEFAULT 'inbound',
+            text TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'text',
+            is_read INTEGER NOT NULL DEFAULT 0,
+            msg_timestamp REAL NOT NULL,
+            created_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_msg_user_waid
+            ON whatsapp_messages(user_id, wa_message_id)
+            WHERE wa_message_id IS NOT NULL AND wa_message_id != '';
+        CREATE INDEX IF NOT EXISTS idx_wa_msg_user_ts
+            ON whatsapp_messages(user_id, msg_timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_wa_msg_user_peer_ts
+            ON whatsapp_messages(user_id, peer_phone, msg_timestamp DESC);
+        """)
+        try:
+            cursor.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS whatsapp_messages_fts USING fts5(
+                text,
+                peer_name,
+                content='whatsapp_messages',
+                content_rowid='rowid'
+            );
+            CREATE TRIGGER IF NOT EXISTS wa_msg_ai AFTER INSERT ON whatsapp_messages BEGIN
+                INSERT INTO whatsapp_messages_fts(rowid, text, peer_name)
+                VALUES (new.rowid, new.text, new.peer_name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wa_msg_ad AFTER DELETE ON whatsapp_messages BEGIN
+                INSERT INTO whatsapp_messages_fts(whatsapp_messages_fts, rowid, text, peer_name)
+                VALUES ('delete', old.rowid, old.text, old.peer_name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wa_msg_au AFTER UPDATE ON whatsapp_messages BEGIN
+                INSERT INTO whatsapp_messages_fts(whatsapp_messages_fts, rowid, text, peer_name)
+                VALUES ('delete', old.rowid, old.text, old.peer_name);
+                INSERT INTO whatsapp_messages_fts(rowid, text, peer_name)
+                VALUES (new.rowid, new.text, new.peer_name);
+            END;
+            """)
+        except sqlite3.OperationalError:
+            pass
 
     def _migrate_existing_data(self):
         """Assigns pre-existing memory, conversation, and pattern files to the primary account."""
@@ -1035,3 +1090,262 @@ class DatabaseService:
                 (float(since), int(limit)),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # -------------------------------------------------------------
+    # WHATSAPP MESSAGES STORE & FTS5 SEARCH (SCOPED BY USER_ID)
+    # -------------------------------------------------------------
+    @staticmethod
+    def _digits_only(raw: Any) -> str:
+        digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+        if digits.startswith("00") and len(digits) > 10:
+            digits = digits[2:]
+        return digits
+
+    def find_whatsapp_contact_by_phone(self, user_id: str, raw_phone: str) -> Optional[Dict[str, Any]]:
+        """Match a saved contact of `user_id` by normalized digits or 10-digit suffix."""
+        digits = self._digits_only(raw_phone)
+        if not user_id or not digits:
+            return None
+        contacts = self.get_whatsapp_contacts(user_id)
+        for c in contacts:
+            c_digits = self._digits_only(c.get("phone_e164", ""))
+            if not c_digits:
+                continue
+            if c_digits == digits:
+                return c
+            if len(digits) >= 10 and len(c_digits) >= 10 and c_digits[-10:] == digits[-10:]:
+                return c
+        return None
+
+    def store_whatsapp_message(
+        self,
+        user_id: str,
+        *,
+        chat_jid: str = "",
+        peer_phone: str = "",
+        peer_name: str = "",
+        sender_phone: str = "",
+        direction: str = "inbound",
+        text: str = "",
+        media_type: str = "text",
+        wa_message_id: str = "",
+        is_read: Optional[bool] = None,
+        msg_timestamp: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Persist a normalized WhatsApp message scoped by `user_id` with dedupe."""
+        clean_text = str(text or "").strip()
+        if not user_id or not clean_text:
+            return None
+
+        clean_peer = self._digits_only(peer_phone or (chat_jid.split("@")[0].split(":")[0] if "@" in chat_jid else ""))
+        clean_sender = self._digits_only(sender_phone) or clean_peer
+        clean_jid = str(chat_jid or (f"{clean_peer}@s.whatsapp.net" if clean_peer else "")).strip()
+        clean_dir = "outbound" if str(direction).lower() == "outbound" else "inbound"
+        clean_wa_id = str(wa_message_id or "").strip()
+
+        # Enrich peer_name from saved user contacts when possible
+        resolved_name = str(peer_name or "").strip()
+        if clean_peer:
+            contact = self.find_whatsapp_contact_by_phone(user_id, clean_peer)
+            if contact and contact.get("display_name"):
+                resolved_name = contact["display_name"]
+
+        read_flag = (1 if clean_dir == "outbound" else 0) if is_read is None else (1 if is_read else 0)
+        now = time.time()
+        try:
+            ts_val = float(msg_timestamp) if msg_timestamp is not None else now
+            if ts_val > 1e12:  # Convert millisecond timestamps if supplied
+                ts_val = ts_val / 1000.0
+        except (TypeError, ValueError):
+            ts_val = now
+
+        conn = self.get_connection()
+        if clean_wa_id:
+            existing = conn.execute(
+                "SELECT * FROM whatsapp_messages WHERE user_id = ? AND wa_message_id = ?",
+                (user_id, clean_wa_id),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+
+        msg_id = f"wam_{uuid.uuid4().hex[:14]}"
+        conn.execute(
+            """INSERT OR IGNORE INTO whatsapp_messages
+               (id, user_id, wa_message_id, chat_jid, peer_phone, peer_name, sender_phone,
+                direction, text, media_type, is_read, msg_timestamp, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                msg_id,
+                user_id,
+                clean_wa_id,
+                clean_jid,
+                clean_peer,
+                resolved_name,
+                clean_sender,
+                clean_dir,
+                clean_text[:4000],
+                str(media_type or "text")[:24],
+                read_flag,
+                ts_val,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM whatsapp_messages WHERE id = ? AND user_id = ?", (msg_id, user_id)).fetchone()
+        return dict(row) if row else None
+
+    def _peer_phone_clause(self, peer_phone: str, col: str = "peer_phone") -> tuple[str, List[Any]]:
+        """Build SQL condition + params matching normalized peer phone or 10-digit suffix."""
+        digits = self._digits_only(peer_phone)
+        if len(digits) >= 10:
+            return f"({col} = ? OR {col} LIKE ?)", [digits, f"%{digits[-10:]}"]
+        if digits:
+            return f"{col} = ?", [digits]
+        return "", []
+
+    def get_whatsapp_messages(
+        self,
+        user_id: str,
+        *,
+        peer_phone: Optional[str] = None,
+        peer_query: Optional[str] = None,
+        unread_only: bool = False,
+        since_ts: Optional[float] = None,
+        limit: int = 15,
+    ) -> List[Dict[str, Any]]:
+        """Fetch recent WhatsApp messages strictly scoped to `user_id`."""
+        if not user_id:
+            return []
+        cap = max(1, min(int(limit or 15), 50))
+        clauses = ["user_id = ?"]
+        params: List[Any] = [user_id]
+
+        if peer_phone:
+            p_sql, p_args = self._peer_phone_clause(peer_phone, col="peer_phone")
+            if p_sql:
+                clauses.append(p_sql)
+                params.extend(p_args)
+        elif peer_query:
+            pq = str(peer_query).strip().lower()
+            if pq:
+                clauses.append("LOWER(peer_name) LIKE ?")
+                params.append(f"%{pq}%")
+
+        if unread_only:
+            clauses.append("is_read = 0")
+        if since_ts is not None:
+            clauses.append("msg_timestamp >= ?")
+            params.append(float(since_ts))
+
+        sql = (
+            "SELECT * FROM whatsapp_messages WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY msg_timestamp DESC, created_at DESC LIMIT ?"
+        )
+        params.append(cap)
+        rows = self.get_connection().execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_whatsapp_messages(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        peer_phone: Optional[str] = None,
+        peer_query: Optional[str] = None,
+        since_ts: Optional[float] = None,
+        limit: int = 15,
+    ) -> List[Dict[str, Any]]:
+        """Search `user_id`'s WhatsApp messages via FTS5 with safe LIKE fallback."""
+        if not user_id:
+            return []
+        raw_q = str(query or "").strip()
+        if not raw_q:
+            return self.get_whatsapp_messages(
+                user_id, peer_phone=peer_phone, peer_query=peer_query, since_ts=since_ts, limit=limit
+            )
+        cap = max(1, min(int(limit or 15), 50))
+        conn = self.get_connection()
+
+        extra_clauses = ["m.user_id = ?"]
+        extra_params: List[Any] = [user_id]
+        if peer_phone:
+            p_sql, p_args = self._peer_phone_clause(peer_phone, col="m.peer_phone")
+            if p_sql:
+                extra_clauses.append(p_sql)
+                extra_params.extend(p_args)
+        elif peer_query:
+            pq = str(peer_query).strip().lower()
+            if pq:
+                extra_clauses.append("LOWER(m.peer_name) LIKE ?")
+                extra_params.append(f"%{pq}%")
+        if since_ts is not None:
+            extra_clauses.append("m.msg_timestamp >= ?")
+            extra_params.append(float(since_ts))
+
+        tokens = re.findall(r"[0-9a-zA-Z\u0c00-\u0c7f]+", raw_q)
+        rows = []
+        if tokens:
+            fts_match = " AND ".join(f'"{tok}"' for tok in tokens[:8])
+            try:
+                sql_fts = (
+                    "SELECT m.* FROM whatsapp_messages m "
+                    "WHERE m.rowid IN ("
+                    "  SELECT rowid FROM whatsapp_messages_fts WHERE whatsapp_messages_fts MATCH ?"
+                    ") AND "
+                    + " AND ".join(extra_clauses)
+                    + " ORDER BY m.msg_timestamp DESC LIMIT ?"
+                )
+                rows = conn.execute(sql_fts, tuple([fts_match] + extra_params + [cap])).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+
+        if not rows:
+            like_val = f"%{raw_q.lower()}%"
+            sql_like = (
+                "SELECT m.* FROM whatsapp_messages m "
+                "WHERE (LOWER(m.text) LIKE ? OR LOWER(m.peer_name) LIKE ?) AND "
+                + " AND ".join(extra_clauses)
+                + " ORDER BY m.msg_timestamp DESC LIMIT ?"
+            )
+            rows = conn.execute(sql_like, tuple([like_val, like_val] + extra_params + [cap])).fetchall()
+
+        return [dict(r) for r in rows]
+
+    def mark_whatsapp_messages_read(
+        self,
+        user_id: str,
+        *,
+        peer_phone: Optional[str] = None,
+        message_ids: Optional[List[str]] = None,
+    ) -> int:
+        """Mark stored WhatsApp messages read strictly within `user_id`."""
+        if not user_id:
+            return 0
+        clauses = ["user_id = ?", "is_read = 0"]
+        params: List[Any] = [user_id]
+        if peer_phone:
+            p_sql, p_args = self._peer_phone_clause(peer_phone, col="peer_phone")
+            if p_sql:
+                clauses.append(p_sql)
+                params.extend(p_args)
+        if message_ids:
+            clean_ids = [str(m).strip() for m in message_ids if str(m).strip()]
+            if not clean_ids:
+                return 0
+            placeholders = ",".join("?" for _ in clean_ids)
+            clauses.append(f"id IN ({placeholders})")
+            params.extend(clean_ids)
+        conn = self.get_connection()
+        cur = conn.execute(f"UPDATE whatsapp_messages SET is_read = 1 WHERE {' AND '.join(clauses)}", tuple(params))
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+    def get_whatsapp_unread_count(self, user_id: str) -> int:
+        if not user_id:
+            return 0
+        row = self.get_connection().execute(
+            "SELECT COUNT(*) AS cnt FROM whatsapp_messages WHERE user_id = ? AND is_read = 0",
+            (user_id,),
+        ).fetchone()
+        return int(row["cnt"]) if row else 0

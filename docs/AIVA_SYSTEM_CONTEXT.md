@@ -21,7 +21,7 @@
 | Layer | Technologies & Frameworks | Key Responsibilities |
 |---|---|---|
 | **Cloud Backend** | Python 3.11, Flask, WebSockets (`websockets`, `gevent`/`threading`), SQLite | API endpoints, intent classification, multi-LLM failover, user isolation, auth, device coordination |
-| **LLM Engine** | Multi-Provider pool: Groq (`openai/gpt-oss-20b`), Gemini (`gemini-2.5-flash-lite`), Mistral | Conversation, compound intent parsing, DAG step planning, automated rate-limit fallbacks |
+| **LLM Engine** | Multi-Provider pool: Groq (`openai/gpt-oss-20b`, `openai/gpt-oss-120b`), Gemini (`gemini-3-flash-preview`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite`), Mistral | Conversation, compound intent parsing, native tool calling, DAG step planning, 429/404 model fallbacks |
 | **STT & TTS** | Groq Whisper `whisper-large-v3`, Microsoft Edge Neural TTS (`edge-tts 7.3.1`) | High-speed cloud audio transcription, human-like voice synthesis (`en-IN-PrabhatNeural` / `en-US-AriaNeural`) |
 | **Desktop Companion** | Electron 33, Node.js 20/24, Windows SAPI (`System.Speech`), Windows API, `ws` | Local execution, global shortcuts, screen capture, Start Menu app discovery, native offline wake word |
 | **Voice Runtime** | Web Audio API, AnalyserNode, MediaRecorder, in-memory PowerShell bytecode | Client-side VAD, 60fps animated Neural Orb, zero-latency earcons, 6s follow-up window, barge-in |
@@ -59,8 +59,8 @@
   - `file_access`: Open local files/folders.
 
 ### C. Agent Core, Tiered Routing & Multi-Agent DAG Planning (`core/agent/`)
-- **Feature-Flagged Agent Loop (`AIVA_AGENT_CORE`, default `0`):** When enabled (`docs/AGENT_ARCHITECTURE.md`), `TieredRouter` (`RULE_COUNT = 9`, `<10ms`) separates deterministic single-step actions (`Tier 0`) from fast Groq tool-calling (`Tier 1`) and deeper multi-step/research synthesis (`Tier 2`) orchestrated by `AgentOrchestrator` (`MAX_STEPS = 6`) over `LLMGateway`.
-- **Typed Tools & Risk Policy (`core/agent/tools/`, `core/agent/policy.py`):** Wraps capabilities plus `recall`, `create_reminder`, and `escalate` with JSON Schema validation, per-channel allowlists, `'say confirm'` gates on destructive/non-trusted actions, and `<tool_result untrusted="true">` fencing.
+- **Feature-Flagged Agent Loop (`AIVA_AGENT_CORE`, default `0`, cutover `1` on Oracle VM):** When enabled (`docs/AGENT_ARCHITECTURE.md`), `TieredRouter` (`RULE_COUNT = 9`, `<10ms`) separates deterministic single-step actions (`Tier 0`) from fast Groq tool-calling (`Tier 1`) and deeper multi-step/research synthesis (`Tier 2`) orchestrated by `AgentOrchestrator` (`MAX_STEPS = 6`) over `LLMGateway`.
+- **Typed Tools & Risk Policy (`core/agent/tools/`, `core/agent/policy.py`):** Wraps capabilities plus `whatsapp_read`, `whatsapp_search`, `recall`, `create_reminder`, and `escalate` (15 built-in tools) with JSON Schema validation, per-channel allowlists, `'say confirm'` gates on destructive/non-trusted actions, and `<tool_result untrusted="true">` fencing.
 - **Streaming & Observability:** `/api/chat/stream` emits SSE stages, deltas, sentence-chunked Edge TTS audio (`pop_complete_sentences`), and normalized sources rendered with locally vendored `marked` + `DOMPurify`. Non-PII aggregates populate `/api/telemetry` and the HUD Engine Stats grid (`T0/T1/T2`, p50/p95, success rate).
 - **Legacy Fallback (`AIVA_AGENT_CORE=0`):** `IntentClassifierService`, `PlannerAgent`, and `WorkflowEngine` remain intact with push delivery to `/ws/hud` and originating channels (`OutcomeReporterService`).
 - **Specialized Agents:** `ResearchAgent` (awaited Tavily search + freshness TTL + source citations), `BrowserAgent` (Selenium + DOM observer), `ObserverAgent`, `MemoryAgent`.
@@ -83,17 +83,19 @@
   - Python Backend to Bridge: `POST http://127.0.0.1:3001/send` with `X-Bridge-Secret`.
   - Non-localhost callers to `/internal/*` are rejected with HTTP 403.
 - **Multi-Channel Capabilities:**
-  - `whatsapp_send(contact, message)`: Resolves contact by display name or alias, checks trust status, applies WhatsApp markdown formatting (`format_for_whatsapp`), and dispatches message via bridge.
+  - `whatsapp_send(contact, message)`: Resolves contact by display name or alias, checks trust status, applies WhatsApp markdown formatting (`format_for_whatsapp`), archives outbound sends, and dispatches message via bridge.
   - `whatsapp_lookup_contact(name)`: Resolves contact details with ambiguity checks.
-  - Works transparently across WhatsApp chat, Web HUD text, and voice.
+  - `whatsapp_read(contact, unread_only, hours_back, limit, mark_read)` & `whatsapp_search(query, contact, hours_back, limit)`: Per-user isolated inbox retrieval and FTS5 search (`untrusted_result=True`) across archived outbound/inbound/history messages with phone masking and contact disambiguation.
+  - Works transparently across WhatsApp chat, Web HUD text (`GET /api/whatsapp/messages`, `POST /api/whatsapp/messages/read`), and voice.
 - **Linking & Security:**
   - 6-digit OTP code generated from HUD Settings (`LINK <code>`), valid for 10 minutes.
   - Self-chat on AIVA's own number maps automatically to `WHATSAPP_OWNER_EMAIL`.
-  - Unknown senders receive at most one rate-limited polite notice; their messages never reach LLMs or tools.
+  - Saved contacts messaging AIVA directly archive quietly (`archived_contact_message`) without false unlinked notices; unknown senders receive at most one rate-limited polite notice and are never archived into user inboxes or passed to LLMs/tools.
+  - Bridge outbound/history sync (`fromMe`, `'append'`, `messaging-history.set`, `@lid` peer PN resolution) pushes asynchronously to `POST /internal/whatsapp/archive` (`X-Bridge-Secret` + localhost check).
   - System commands: `HELP`, `STATUS`, `STOP`/`UNLINK`, contact management (`save <num> as <name>`, `add alias <alias> for <name>`, `list contacts`).
   - Voice notes transcribed seamlessly via Groq Whisper (`whisper-large-v3`).
   - Power control commands (`shutdown`, `restart`) from WhatsApp are blocked unless `WHATSAPP_ALLOW_POWER_CONTROL=true` and verbally/text confirmed within 60 seconds.
-- **Database Isolation:** `whatsapp_links`, `whatsapp_contacts`, and `whatsapp_events` in SQLite are strictly scoped by `user_id`. Non-PII structured logging with phone masking (`+*****3210`).
+- **Database Isolation:** `whatsapp_links`, `whatsapp_contacts`, `whatsapp_events`, `whatsapp_messages`, and `whatsapp_messages_fts` in SQLite are strictly scoped by `user_id`. Non-PII structured logging with phone masking (`+*****3210`, never logging message bodies).
 
 ---
 

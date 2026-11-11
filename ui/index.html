@@ -544,6 +544,35 @@
                         </div>
                     </div>
 
+                    <!-- Recent WhatsApp Messages Card (Phase 2) -->
+                    <div class="wa-messages-card">
+                        <div class="wa-messages-header">
+                            <div>
+                                <div class="wa-pair-title">Recent WhatsApp Messages</div>
+                                <div class="wa-pair-subtitle">Private, user-isolated inbox archive &amp; FTS5 search (masked numbers).</div>
+                            </div>
+                            <div class="wa-messages-header-actions">
+                                <span id="wa-unread-badge" class="wa-phase-badge">0 unread</span>
+                                <button id="wa-btn-mark-all-read" class="wa-btn wa-btn-secondary" type="button">Mark All Read</button>
+                                <button id="wa-btn-refresh-messages" class="wa-btn wa-btn-secondary" type="button">Refresh</button>
+                            </div>
+                        </div>
+
+                        <div class="wa-messages-toolbar">
+                            <input id="wa-msg-search-input" class="wa-pair-input" type="text" placeholder="Search messages (keywords, flight, biryani...)">
+                            <input id="wa-msg-contact-input" class="wa-pair-input wa-msg-contact-filter" type="text" placeholder="Contact name/alias (optional)">
+                            <label class="wa-msg-unread-toggle">
+                                <input id="wa-msg-unread-only" type="checkbox">
+                                <span>Unread only</span>
+                            </label>
+                            <button id="wa-btn-search-messages" class="wa-btn wa-btn-primary" type="button">Search</button>
+                        </div>
+
+                        <div id="wa-messages-list" class="wa-messages-list">
+                            <div class="wa-messages-empty">Loading archived WhatsApp messages...</div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </section>
