@@ -39,12 +39,34 @@ class DatabaseService:
             self.db_path = db_path
 
         self._local = threading.local()
+        self._mem_lock = threading.RLock()
+        self._mem_conn = None
         self._create_schema()
         self._migrate_schema()
         self._migrate_existing_data()
+        try:
+            from core.memory.store import MemoryStore
+            mem_store = MemoryStore(self)
+            mem_store.migrate_legacy_data()
+            mem_store.drop_legacy_tables()
+            mem_store.remediate_identity_memories()
+        except Exception as e:
+            logger.warning(f"MemoryStore schema/migration warning: {e}")
         logger.info(f"Database initialized at: {self.db_path}")
 
     def get_connection(self) -> sqlite3.Connection:
+        if self.db_path == ":memory:":
+            with self._mem_lock:
+                if self._mem_conn is None:
+                    conn = sqlite3.connect(
+                        ":memory:",
+                        check_same_thread=False,
+                        timeout=20.0
+                    )
+                    conn.row_factory = sqlite3.Row
+                    conn.execute("PRAGMA foreign_keys = ON;")
+                    self._mem_conn = conn
+                return self._mem_conn
         if not hasattr(self._local, "conn") or self._local.conn is None:
             conn = sqlite3.connect(
                 self.db_path,
@@ -132,31 +154,6 @@ class DatabaseService:
         CREATE INDEX IF NOT EXISTS idx_audit_user ON command_audit_logs(user_id);
         CREATE INDEX IF NOT EXISTS idx_audit_created ON command_audit_logs(created_at);
 
-        CREATE TABLE IF NOT EXISTS user_memories (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            key TEXT NOT NULL,
-            value_json TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-            UNIQUE(user_id, key)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_user_memories_user ON user_memories(user_id);
-
-        CREATE TABLE IF NOT EXISTS conversation_history (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            message TEXT NOT NULL,
-            route TEXT,
-            created_at REAL NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_history(user_id, created_at);
-
         CREATE TABLE IF NOT EXISTS user_task_patterns (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -175,6 +172,45 @@ class DatabaseService:
             updated_at REAL NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS whatsapp_links (
+            phone_e164 TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            verified_at REAL,
+            link_code TEXT,
+            link_code_expires_at REAL,
+            created_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_links_user ON whatsapp_links(user_id);
+
+        CREATE TABLE IF NOT EXISTS whatsapp_contacts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            phone_e164 TEXT NOT NULL,
+            is_self INTEGER NOT NULL DEFAULT 0,
+            trusted INTEGER NOT NULL DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_contacts_user ON whatsapp_contacts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_contacts_phone ON whatsapp_contacts(user_id, phone_e164);
+
+        CREATE TABLE IF NOT EXISTS whatsapp_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            direction TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_ms REAL DEFAULT 0.0,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_events_user ON whatsapp_events(user_id);
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_events_created ON whatsapp_events(created_at);
         """)
         conn.commit()
 
@@ -194,6 +230,48 @@ class DatabaseService:
         otp_cols = [row["name"] for row in cursor.execute("PRAGMA table_info(otps)").fetchall()]
         if "name" not in otp_cols:
             cursor.execute("ALTER TABLE otps ADD COLUMN name TEXT DEFAULT ''")
+
+        # Ensure WhatsApp tables exist
+        cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS whatsapp_links (
+            phone_e164 TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            verified_at REAL,
+            link_code TEXT,
+            link_code_expires_at REAL,
+            created_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_links_user ON whatsapp_links(user_id);
+
+        CREATE TABLE IF NOT EXISTS whatsapp_contacts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            phone_e164 TEXT NOT NULL,
+            is_self INTEGER NOT NULL DEFAULT 0,
+            trusted INTEGER NOT NULL DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_contacts_user ON whatsapp_contacts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_contacts_phone ON whatsapp_contacts(user_id, phone_e164);
+
+        CREATE TABLE IF NOT EXISTS whatsapp_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            direction TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_ms REAL DEFAULT 0.0,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_events_user ON whatsapp_events(user_id);
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_events_created ON whatsapp_events(created_at);
+        """)
 
         conn.commit()
 
@@ -232,60 +310,7 @@ class DatabaseService:
         if primary_id not in target_ids:
             target_ids.append(primary_id)
 
-        # 1. Migrate memory/user_memory.json to user_memories
-        user_mem_path = os.path.join(base_dir, "memory", "user_memory.json")
-        if os.path.exists(user_mem_path):
-            try:
-                with open(user_mem_path, "r", encoding="utf-8") as f:
-                    mem_data = json.load(f)
-                now = time.time()
-                for target_uid in target_ids:
-                    for k, v in mem_data.items():
-                        mem_id = f"mem_{uuid.uuid4().hex[:12]}"
-                        cursor.execute(
-                            """INSERT OR IGNORE INTO user_memories (id, user_id, key, value_json, created_at, updated_at)
-                               VALUES (?, ?, ?, ?, ?, ?)""",
-                            (mem_id, target_uid, k, json.dumps(v), now, now)
-                        )
-                conn.commit()
-            except Exception as e:
-                logger.warning(f"Failed migrating user_memory.json: {e}")
-
-        # 2. Migrate memory/conversation_memory.json to conversation_history
-        conv_mem_path = os.path.join(base_dir, "memory", "conversation_memory.json")
-        if os.path.exists(conv_mem_path):
-            try:
-                existing_count = cursor.execute(
-                    "SELECT count(*) as c FROM conversation_history WHERE user_id = ?",
-                    (primary_id,)
-                ).fetchone()["c"]
-                if existing_count == 0:
-                    with open(conv_mem_path, "r", encoding="utf-8") as f:
-                        conv_data = json.load(f)
-                    history_list = conv_data.get("history", [])
-                    now = time.time() - (len(history_list) * 60)
-                    for item in history_list:
-                        u_msg = item.get("user")
-                        a_msg = item.get("aiva")
-                        if u_msg:
-                            cursor.execute(
-                                """INSERT INTO conversation_history (id, user_id, role, message, route, created_at)
-                                   VALUES (?, ?, 'user', ?, 'general', ?)""",
-                                (str(uuid.uuid4()), primary_id, u_msg, now)
-                            )
-                            now += 1.0
-                        if a_msg:
-                            cursor.execute(
-                                """INSERT INTO conversation_history (id, user_id, role, message, route, created_at)
-                                   VALUES (?, ?, 'aiva', ?, 'general', ?)""",
-                                (str(uuid.uuid4()), primary_id, a_msg, now)
-                            )
-                            now += 1.0
-                    conn.commit()
-            except Exception as e:
-                logger.warning(f"Failed migrating conversation_memory.json: {e}")
-
-        # 3. Migrate memory/task_patterns.json to user_task_patterns
+        # Migrate memory/task_patterns.json to user_task_patterns
         task_pat_path = os.path.join(base_dir, "memory", "task_patterns.json")
         if os.path.exists(task_pat_path):
             try:
@@ -605,93 +630,6 @@ class DatabaseService:
         return [dict(r) for r in rows]
 
     # -------------------------------------------------------------
-    # PER-USER MEMORY
-    # -------------------------------------------------------------
-    def get_user_memories(self, user_id: str) -> Dict[str, Any]:
-        """Returns all persistent memory facts scoped strictly to this user_id."""
-        conn = self.get_connection()
-        rows = conn.execute(
-            "SELECT key, value_json FROM user_memories WHERE user_id = ?",
-            (user_id,)
-        ).fetchall()
-        result = {}
-        for r in rows:
-            try:
-                result[r["key"]] = json.loads(r["value_json"])
-            except Exception:
-                result[r["key"]] = r["value_json"]
-        return result
-
-    def set_user_memory(self, user_id: str, key: str, value: Any) -> bool:
-        """Stores a persistent memory fact strictly scoped to user_id."""
-        conn = self.get_connection()
-        now = time.time()
-        mem_id = f"mem_{uuid.uuid4().hex[:12]}"
-        val_json = json.dumps(value)
-        conn.execute(
-            """INSERT INTO user_memories (id, user_id, key, value_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(user_id, key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at""",
-            (mem_id, user_id, key, val_json, now, now)
-        )
-        conn.commit()
-        return True
-
-    def delete_user_memory(self, user_id: str, key: str) -> bool:
-        """Deletes a persistent memory fact strictly scoped to user_id."""
-        conn = self.get_connection()
-        cursor = conn.execute(
-            "DELETE FROM user_memories WHERE user_id = ? AND key = ?",
-            (user_id, key)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-
-    # -------------------------------------------------------------
-    # CONVERSATION HISTORY
-    # -------------------------------------------------------------
-    def add_conversation_turn(
-        self,
-        user_id: str,
-        role: str,
-        message: str,
-        route: Optional[str] = None
-    ) -> str:
-        """Appends a turn to conversation_history strictly scoped to user_id."""
-        conn = self.get_connection()
-        turn_id = str(uuid.uuid4())
-        now = time.time()
-        conn.execute(
-            """INSERT INTO conversation_history (id, user_id, role, message, route, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (turn_id, user_id, role, message, route, now)
-        )
-        conn.commit()
-        return turn_id
-
-    def get_conversation_history(self, user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Returns conversation turns for this user_id in chronological order."""
-        conn = self.get_connection()
-        rows = conn.execute(
-            """SELECT * FROM (
-                   SELECT id, user_id, role, message, route, created_at 
-                   FROM conversation_history 
-                   WHERE user_id = ? 
-                   ORDER BY created_at DESC 
-                   LIMIT ?
-               ) ORDER BY created_at ASC""",
-            (user_id, limit)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def clear_conversation_history(self, user_id: str) -> bool:
-        """Deletes all conversation history for user_id."""
-        conn = self.get_connection()
-        conn.execute("DELETE FROM conversation_history WHERE user_id = ?", (user_id,))
-        conn.commit()
-        return True
-
-    # -------------------------------------------------------------
     # USER TASK PATTERNS
     # -------------------------------------------------------------
     def get_user_task_patterns(self, user_id: str) -> Dict[str, Any]:
@@ -748,6 +686,246 @@ class DatabaseService:
                VALUES (?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at""",
             (user_id, val_json, now)
+        )
+        conn.commit()
+        return True
+
+    # -------------------------------------------------------------
+    # WHATSAPP LINKS & CONTACTS (SCOPED BY USER_ID)
+    # -------------------------------------------------------------
+    def create_or_update_whatsapp_link(
+        self, user_id: str, phone_e164: str, link_code: str, expires_at: float
+    ) -> bool:
+        conn = self.get_connection()
+        now = time.time()
+        conn.execute(
+            """INSERT INTO whatsapp_links (phone_e164, user_id, status, link_code, link_code_expires_at, created_at)
+               VALUES (?, ?, 'pending', ?, ?, ?)
+               ON CONFLICT(phone_e164) DO UPDATE SET
+                   user_id = excluded.user_id,
+                   status = 'pending',
+                   link_code = excluded.link_code,
+                   link_code_expires_at = excluded.link_code_expires_at""",
+            (phone_e164, user_id, link_code, expires_at, now)
+        )
+        conn.commit()
+        return True
+
+    def get_whatsapp_link_by_code(self, code: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        now = time.time()
+        row = conn.execute(
+            """SELECT * FROM whatsapp_links
+               WHERE link_code = ? AND link_code_expires_at > ? AND status = 'pending'""",
+            (code.strip().upper(), now)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def verify_whatsapp_link(self, phone_e164: str, code: str) -> bool:
+        conn = self.get_connection()
+        now = time.time()
+        cursor = conn.execute(
+            """UPDATE whatsapp_links
+               SET status = 'verified', verified_at = ?, link_code = NULL, link_code_expires_at = NULL
+               WHERE phone_e164 = ? AND link_code = ? AND link_code_expires_at > ?""",
+            (now, phone_e164, code.strip().upper(), now)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def get_whatsapp_link_by_phone(self, phone_e164: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        row = conn.execute(
+            "SELECT * FROM whatsapp_links WHERE phone_e164 = ? AND status = 'verified'",
+            (phone_e164,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_whatsapp_links_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        rows = conn.execute(
+            "SELECT * FROM whatsapp_links WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def unlink_whatsapp(self, user_id: str, phone_e164: str) -> bool:
+        conn = self.get_connection()
+        cursor = conn.execute(
+            "DELETE FROM whatsapp_links WHERE user_id = ? AND phone_e164 = ?",
+            (user_id, phone_e164)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def add_whatsapp_contact(
+        self,
+        user_id: str,
+        display_name: str,
+        phone_e164: str,
+        aliases: Optional[List[str]] = None,
+        is_self: bool = False,
+        trusted: bool = True
+    ) -> Dict[str, Any]:
+        conn = self.get_connection()
+        contact_id = f"wac_{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        aliases_list = [a.strip() for a in (aliases or []) if a.strip()]
+        aliases_json = json.dumps(aliases_list)
+        conn.execute(
+            """INSERT INTO whatsapp_contacts (id, user_id, display_name, aliases_json, phone_e164, is_self, trusted, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (contact_id, user_id, display_name.strip(), aliases_json, phone_e164.strip(), 1 if is_self else 0, 1 if trusted else 0, now, now)
+        )
+        conn.commit()
+        return {
+            "id": contact_id,
+            "user_id": user_id,
+            "display_name": display_name.strip(),
+            "aliases": aliases_list,
+            "phone_e164": phone_e164.strip(),
+            "is_self": is_self,
+            "trusted": trusted,
+            "created_at": now,
+            "updated_at": now
+        }
+
+    def get_whatsapp_contacts(self, user_id: str) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        rows = conn.execute(
+            "SELECT * FROM whatsapp_contacts WHERE user_id = ? ORDER BY display_name ASC",
+            (user_id,)
+        ).fetchall()
+        contacts = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["aliases"] = json.loads(d.get("aliases_json") or "[]")
+            except Exception:
+                d["aliases"] = []
+            d["is_self"] = bool(d.get("is_self"))
+            d["trusted"] = bool(d.get("trusted"))
+            contacts.append(d)
+        return contacts
+
+    def get_whatsapp_contact_by_id(self, user_id: str, contact_id: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        row = conn.execute(
+            "SELECT * FROM whatsapp_contacts WHERE user_id = ? AND id = ?",
+            (user_id, contact_id)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["aliases"] = json.loads(d.get("aliases_json") or "[]")
+        except Exception:
+            d["aliases"] = []
+        d["is_self"] = bool(d.get("is_self"))
+        d["trusted"] = bool(d.get("trusted"))
+        return d
+
+    def update_whatsapp_contact(
+        self,
+        user_id: str,
+        contact_id: str,
+        display_name: Optional[str] = None,
+        phone_e164: Optional[str] = None,
+        aliases: Optional[List[str]] = None,
+        trusted: Optional[bool] = None,
+        is_self: Optional[bool] = None
+    ) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        current = self.get_whatsapp_contact_by_id(user_id, contact_id)
+        if not current:
+            return None
+
+        new_name = display_name.strip() if display_name is not None else current["display_name"]
+        new_phone = phone_e164.strip() if phone_e164 is not None else current["phone_e164"]
+        new_aliases = aliases if aliases is not None else current["aliases"]
+        new_trusted = trusted if trusted is not None else current["trusted"]
+        new_is_self = is_self if is_self is not None else current["is_self"]
+        now = time.time()
+
+        conn.execute(
+            """UPDATE whatsapp_contacts
+               SET display_name = ?, phone_e164 = ?, aliases_json = ?, trusted = ?, is_self = ?, updated_at = ?
+               WHERE user_id = ? AND id = ?""",
+            (
+                new_name,
+                new_phone,
+                json.dumps([a.strip() for a in new_aliases if a.strip()]),
+                1 if new_trusted else 0,
+                1 if new_is_self else 0,
+                now,
+                user_id,
+                contact_id
+            )
+        )
+        conn.commit()
+        return self.get_whatsapp_contact_by_id(user_id, contact_id)
+
+    def delete_whatsapp_contact(self, user_id: str, contact_id: str) -> bool:
+        conn = self.get_connection()
+        cursor = conn.execute(
+            "DELETE FROM whatsapp_contacts WHERE user_id = ? AND id = ?",
+            (user_id, contact_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def resolve_whatsapp_contact(self, user_id: str, query: str) -> List[Dict[str, Any]]:
+        """Resolves contact by display_name, alias, or phone_e164. Exact matches prioritized."""
+        all_contacts = self.get_whatsapp_contacts(user_id)
+        if not all_contacts:
+            return []
+
+        q = query.strip().lower()
+        # Digits-only check for phone matching
+        q_digits = "".join(ch for ch in q if ch.isdigit())
+
+        exact_matches = []
+        partial_matches = []
+
+        for c in all_contacts:
+            c_name = c["display_name"].lower()
+            c_aliases = [a.lower() for a in c.get("aliases", [])]
+            c_phone_digits = "".join(ch for ch in c["phone_e164"] if ch.isdigit())
+
+            # 1. Exact match on display name or any alias
+            if q == c_name or q in c_aliases:
+                exact_matches.append(c)
+                continue
+
+            # 2. Exact match on phone digits (suffix or full)
+            if q_digits and (c_phone_digits == q_digits or c_phone_digits.endswith(q_digits)):
+                exact_matches.append(c)
+                continue
+
+            # 3. Partial substring match
+            if q in c_name or any(q in a for a in c_aliases):
+                partial_matches.append(c)
+
+        if exact_matches:
+            return exact_matches
+        return partial_matches
+
+    def log_whatsapp_event(
+        self,
+        user_id: Optional[str],
+        direction: str,
+        stage: str,
+        status: str,
+        duration_ms: float = 0.0
+    ) -> bool:
+        """Logs WhatsApp metadata event. NEVER stores message content or raw audio."""
+        conn = self.get_connection()
+        event_id = f"waev_{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        conn.execute(
+            """INSERT INTO whatsapp_events (id, user_id, direction, stage, status, duration_ms, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (event_id, user_id, direction, stage, status, float(duration_ms), now)
         )
         conn.commit()
         return True

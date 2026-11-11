@@ -17,6 +17,7 @@ from flask import Flask, request, jsonify, send_from_directory, make_response, s
 from flask_cors import CORS
 from flask_sock import Sock
 
+from core.memory import MemoryEngine
 from core.runtime.kernel import AIVAKernel
 from services.database_service import DatabaseService
 from services.auth_service import AuthService
@@ -35,6 +36,51 @@ db = DatabaseService()
 auth_service = AuthService(db)
 device_manager = DeviceManager(db)
 device_channel = DeviceChannel(db, device_manager)
+
+_fallback_memory_engine = None
+_memory_engine_lock = threading.RLock()
+_hud_ws_clients = {}
+_hud_ws_lock = threading.RLock()
+
+
+def _get_memory_engine() -> MemoryEngine:
+    """Return active kernel's MemoryEngine or a lazily cached engine bound to current `db`."""
+    global _fallback_memory_engine
+    if kernel and getattr(kernel, "memory_engine", None) and kernel.memory_engine.db is db:
+        return kernel.memory_engine
+    with _memory_engine_lock:
+        if _fallback_memory_engine is None or _fallback_memory_engine.db is not db:
+            _fallback_memory_engine = MemoryEngine(db=db, start_worker=False)
+        return _fallback_memory_engine
+
+
+def _deliver_to_hud(user_id: str, payload: dict) -> bool:
+    """Push proactive reminder / briefing notifications over open HUD WebSockets."""
+    delivered = False
+    msg_json = json.dumps({"type": "memory_notification", **payload})
+    with _hud_ws_lock:
+        conns = list(_hud_ws_clients.get(user_id, set()))
+        dead = []
+        for ws in conns:
+            try:
+                ws.send(msg_json)
+                delivered = True
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            _hud_ws_clients.get(user_id, set()).discard(ws)
+
+    # Also notify any online Windows agent sockets owned by user_id
+    if device_channel:
+        with device_channel._channel_lock:
+            for dev_id, ws in list(device_channel._connections.items()):
+                if device_channel._device_user_map.get(dev_id) == user_id:
+                    try:
+                        ws.send(msg_json)
+                        delivered = True
+                    except Exception:
+                        pass
+    return delivered
 
 
 def get_authenticated_user():
@@ -93,21 +139,9 @@ kernel_thread = None
 
 
 def _clean_for_speech(text: str) -> str:
-    """Clean markdown, emoji, and formatting so Alexa speaks naturally."""
-    if not text:
-        return "Done."
-    clean = re.sub(r"[*_#`~\[\]>]+", "", text)
-    clean = re.sub(
-        r"[\U0001F600-\U0001F64F"
-        r"\U0001F300-\U0001F5FF"
-        r"\U0001F680-\U0001F6FF"
-        r"\U0001F1E0-\U0001F1FF"
-        r"\u2600-\u26FF\u2700-\u27BF]+",
-        "",
-        clean,
-    )
-    clean = re.sub(r"\s+", " ", clean).strip()
-    return clean or "Done."
+    """Clean markdown, emoji, and formatting so speech delivery is natural and crisp."""
+    from services.voice_service import sanitize_for_speech
+    return sanitize_for_speech(text)
 
 
 def build_alexa_response(speech_text: str, should_end_session: bool = False, reprompt_text: str = None) -> dict:
@@ -220,9 +254,16 @@ def api_chat():
                 except Exception as v_err:
                     print(f"[VisionDirect Error]: {v_err}")
 
-        # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> DAG / Tool -> Prabhat TTS)
+        # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> MemoryEngine / DAG / Tool)
         if not result:
-            result = run_async(kernel.input_handler.process_query(msg, speak=False))
+            result = run_async(
+                kernel.input_handler.process_query(
+                    msg,
+                    speak=False,
+                    user_id=auth_user["id"],
+                    channel="hud",
+                )
+            )
         
         reply_text = result.get("response", "Done.")
         response_data = {
@@ -511,36 +552,227 @@ def get_audit_logs(user):
 
 
 # =====================================================================
-# REAL-TIME SECURE WEBSOCKET ENDPOINT (/ws/device)
+# REAL-TIME SECURE WEBSOCKET ENDPOINTS (/ws/device & /ws/hud)
 # =====================================================================
 @sock.route("/ws/device")
 def ws_device_endpoint(ws):
     device_channel.handle_ws_connection(ws, request.environ)
 
 
+@sock.route("/ws/hud")
+def ws_hud_endpoint(ws):
+    """Authenticated WebSocket channel for HUD notifications, proactive reminders & briefings."""
+    token = request.args.get("token") or request.cookies.get("aiva_access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+    payload = auth_service.verify_access_token(token) if token else None
+    if not payload:
+        try:
+            ws.send(json.dumps({"type": "error", "error": "unauthorized"}))
+        except Exception:
+            pass
+        return
+    uid = payload.get("sub") or payload.get("user_id")
+    if not uid:
+        return
+    with _hud_ws_lock:
+        _hud_ws_clients.setdefault(uid, set()).add(ws)
+    try:
+        ws.send(json.dumps({"type": "connected", "channel": "hud"}))
+        # Flush recent undelivered notifications on connect
+        mem = _get_memory_engine()
+        recent = mem.scheduler.recent_notifications.get(uid, [])[-5:]
+        for item in recent:
+            ws.send(json.dumps({"type": "memory_notification", **item}))
+        while True:
+            msg = ws.receive(timeout=30)
+            if msg is None:
+                # Poll timeout or closed; verify connection on next cycle
+                continue
+    except Exception:
+        pass
+    finally:
+        with _hud_ws_lock:
+            _hud_ws_clients.get(uid, set()).discard(ws)
+
+
+# =====================================================================
+# UNIFIED MEMORY & REMINDER APIS (JWT-protected, user_id-scoped)
+# =====================================================================
 @app.route("/api/memory", methods=["GET"])
 @require_auth
 def api_memory(user):
-    """Fetches user memory and learned task patterns scoped strictly to the authenticated user."""
+    """Fetch memories (searchable, filterable by type), entities, reminders, settings, and task patterns."""
     uid = user["id"]
-    user_mem = db.get_user_memories(uid)
+    engine = _get_memory_engine()
+    mem_type = request.args.get("type") or None
+    search_q = (request.args.get("q") or request.args.get("search") or "").strip() or None
+
+    items = engine.list_memories(uid, mem_type=mem_type, search=search_q, limit=250)
+    grouped = {}
+    for m in items:
+        grouped.setdefault(m["type"], []).append(m)
+
+    entities = engine.list_entities(uid)
+    reminders = engine.list_reminders(uid)
+    settings = engine.get_settings(uid)
     task_patterns = db.get_user_task_patterns(uid)
     return jsonify({
         "status": "success",
-        "user_memory": user_mem,
-        "task_patterns": task_patterns
+        "memories": items,
+        "grouped": grouped,
+        "entities": entities,
+        "reminders": reminders,
+        "settings": settings,
+        "preferred_name": engine.get_preferred_name(uid),
+        "display_name": engine.get_user_display_name(uid),
+        "task_patterns": task_patterns,
     })
+
+
+@app.route("/api/memory/<memory_id>", methods=["PATCH", "DELETE"])
+@require_auth
+def api_memory_item(user, memory_id):
+    """Edit or permanently forget a single memory belonging to the authenticated user."""
+    uid = user["id"]
+    engine = _get_memory_engine()
+    if request.method == "DELETE":
+        ok = engine.forget_memory(uid, memory_id)
+        if not ok:
+            return jsonify({"status": "error", "error": "Memory not found"}), 404
+        return jsonify({"status": "success", "deleted": memory_id})
+
+    body = request.get_json(silent=True) or {}
+    try:
+        updated = engine.update_memory(
+            uid,
+            memory_id,
+            content=body.get("content"),
+            summary=body.get("summary"),
+            importance=body.get("importance"),
+            mem_type=body.get("type"),
+            entities=body.get("entities"),
+        )
+    except ValueError as err:
+        return jsonify({"status": "error", "error": str(err)}), 400
+    if not updated:
+        return jsonify({"status": "error", "error": "Memory not found"}), 404
+    return jsonify({"status": "success", "memory": updated})
+
+
+@app.route("/api/memory/forget-all", methods=["POST"])
+@require_auth
+def api_memory_forget_all(user):
+    """Erase all memories, entities, links, FTS entries, embeddings, and reminders for one user."""
+    uid = user["id"]
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({
+            "status": "error",
+            "error": "confirmation_required",
+            "message": "Pass {\"confirm\": true} to permanently erase all your memory data.",
+        }), 400
+    deleted = _get_memory_engine().forget_all(uid)
+    return jsonify({"status": "success", "deleted": deleted})
+
+
+@app.route("/api/memory/export", methods=["GET"])
+@require_auth
+def api_memory_export(user):
+    """Download complete user memory export as JSON."""
+    uid = user["id"]
+    export_payload = _get_memory_engine().export_user_data(uid)
+    resp = make_response(json.dumps(export_payload, indent=2))
+    resp.headers["Content-Type"] = "application/json"
+    resp.headers["Content-Disposition"] = 'attachment; filename="aiva-memory-export.json"'
+    return resp
+
+
+@app.route("/api/memory/settings", methods=["GET", "PATCH"])
+@require_auth
+def api_memory_settings(user):
+    """Read or update per-user memory controls (memory_enabled, learning_paused, quiet_hours, morning_briefing)."""
+    uid = user["id"]
+    engine = _get_memory_engine()
+    if request.method == "PATCH":
+        patch = request.get_json(silent=True) or {}
+        settings = engine.update_settings(uid, patch)
+        return jsonify({"status": "success", "settings": settings})
+    return jsonify({"status": "success", "settings": engine.get_settings(uid)})
+
+
+@app.route("/api/reminders", methods=["GET", "POST"])
+@require_auth
+def api_reminders(user):
+    """List or create prospective reminders scoped to authenticated user."""
+    uid = user["id"]
+    engine = _get_memory_engine()
+    if request.method == "GET":
+        status_filter = request.args.get("status") or None
+        reminders = engine.list_reminders(uid, status=status_filter)
+        return jsonify({"status": "success", "reminders": reminders})
+
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    due_at = body.get("due_at")
+    if not text or due_at is None:
+        return jsonify({"status": "error", "error": "text and due_at are required"}), 400
+    res = engine.create_reminder(
+        user_id=uid,
+        text=text,
+        due_at=due_at,
+        recurrence=body.get("recurrence"),
+        channel=body.get("channel"),
+        urgent=bool(body.get("urgent", False)),
+    )
+    if res.get("status") != "success":
+        return jsonify(res), 400
+    return jsonify(res), 201
+
+
+@app.route("/api/reminders/<reminder_id>", methods=["PATCH", "DELETE"])
+@require_auth
+def api_reminder_item(user, reminder_id):
+    """Update status/snooze or cancel a reminder belonging to the authenticated user."""
+    uid = user["id"]
+    engine = _get_memory_engine()
+    if request.method == "DELETE":
+        updated = engine.store.update_reminder(uid, reminder_id, status="cancelled")
+        if not updated:
+            return jsonify({"status": "error", "error": "Reminder not found"}), 404
+        return jsonify({"status": "success", "reminder": updated.to_dict()})
+
+    body = request.get_json(silent=True) or {}
+    if body.get("snooze_seconds"):
+        rem = engine.scheduler.snooze_reminder(uid, reminder_id=reminder_id, duration_seconds=int(body["snooze_seconds"]))
+        if not rem:
+            return jsonify({"status": "error", "error": "Reminder not found"}), 404
+        return jsonify({"status": "success", "reminder": rem.to_dict()})
+
+    updated = engine.store.update_reminder(
+        uid,
+        reminder_id,
+        status=body.get("status"),
+        due_at=body.get("due_at"),
+        text=body.get("text"),
+    )
+    if not updated:
+        return jsonify({"status": "error", "error": "Reminder not found"}), 404
+    return jsonify({"status": "success", "reminder": updated.to_dict()})
 
 
 @app.route("/api/history", methods=["GET", "DELETE"])
 @require_auth
 def api_history(user):
-    """Fetches or clears conversation history scoped strictly to the authenticated user."""
+    """Fetches or clears conversation history from MemoryEngine scoped strictly to the authenticated user."""
     uid = user["id"]
+    engine = _get_memory_engine()
     if request.method == "DELETE":
-        db.clear_conversation_history(uid)
+        engine.clear_history(uid)
         return jsonify({"status": "success", "message": "Conversation history cleared."})
-    history = db.get_conversation_history(uid, limit=100)
+    history = engine.get_history(uid, limit=100)
     return jsonify({"status": "success", "history": history})
 
 
@@ -551,8 +783,10 @@ def api_user_settings(user):
     uid = user["id"]
     if request.method == "POST":
         settings_data = request.json or {}
-        db.set_user_settings(uid, settings_data)
-        return jsonify({"status": "success", "settings": settings_data})
+        existing = db.get_user_settings(uid) or {}
+        existing.update(settings_data)
+        db.set_user_settings(uid, existing)
+        return jsonify({"status": "success", "settings": existing})
     return jsonify({"status": "success", "settings": db.get_user_settings(uid)})
 
 
@@ -644,6 +878,8 @@ def api_voice_transcribe():
         return jsonify({"status": "error", "error": "No audio data provided"}), 400
 
     try:
+        import time
+        t0 = time.perf_counter()
         from core.shared.config_loader import load_secrets
         import groq
 
@@ -665,6 +901,8 @@ def api_voice_transcribe():
                     model="whisper-large-v3"
                 )
                 transcript_text = getattr(transcription, 'text', str(transcription)).strip()
+                duration_ms = (time.perf_counter() - t0) * 1000
+                print(f"[VoicePipeline] stage=stt bytes={len(audio_bytes)} duration_ms={duration_ms:.1f} status=ok")
                 if transcript_text:
                     break
             except Exception as e:
@@ -747,7 +985,8 @@ def alexa_webhook():
     if req_type == "LaunchRequest":
         user_name = "Charan"
         try:
-            user_name = kernel.user_memory_service.get("name") or "Charan"
+            uid = getattr(kernel, "active_user_id", None)
+            user_name = kernel.memory_engine.get_user_display_name(uid) or "Charan"
         except Exception:
             pass
 
@@ -794,7 +1033,14 @@ def alexa_webhook():
                     kernel.active_user_id = primary["id"]
 
             # Process query through AIVA without PC TTS (since Echo will speak the response)
-            result = run_async(kernel.input_handler.process_query(query, speak=False))
+            result = run_async(
+                kernel.input_handler.process_query(
+                    query,
+                    speak=False,
+                    user_id=getattr(kernel, "active_user_id", None),
+                    channel="voice",
+                )
+            )
             response_text = result.get("response", "Command executed.")
             should_end = result.get("should_end_session", False)
             reprompt = "What else can I help you with?" if not should_end else None
@@ -834,7 +1080,14 @@ def direct_command():
 
     print(f"\n[HTTP Command]: {msg} (User: {getattr(kernel, 'active_user_id', 'none')})")
     try:
-        result = run_async(kernel.input_handler.process_query(msg, speak=True))
+        result = run_async(
+            kernel.input_handler.process_query(
+                msg,
+                speak=True,
+                user_id=getattr(kernel, "active_user_id", None),
+                channel="hud",
+            )
+        )
         return jsonify({
             "status": "success",
             "query": msg,
@@ -843,6 +1096,164 @@ def direct_command():
         })
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# =====================================================================
+# WHATSAPP CHANNEL ENDPOINTS
+# =====================================================================
+@app.route("/internal/whatsapp/inbound", methods=["POST"])
+def internal_whatsapp_inbound():
+    """
+    Inbound webhook exclusively for the local Baileys Node bridge.
+    Rejects non-localhost callers and validates X-Bridge-Secret.
+    """
+    client_ip = request.remote_addr or ""
+    if client_ip not in ("127.0.0.1", "::1", "localhost"):
+        return jsonify({"error": "forbidden", "message": "Localhost only"}), 403
+
+    from services.whatsapp_service import verify_bridge_secret
+    secret = request.headers.get("X-Bridge-Secret", "")
+    if not verify_bridge_secret(secret):
+        return jsonify({"error": "unauthorized", "message": "Invalid bridge secret"}), 401
+
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"error": "service_unavailable", "message": "Kernel WhatsApp service not ready"}), 503
+
+    payload = request.get_json(silent=True) or {}
+    
+    if kernel_loop and kernel_loop.is_running():
+        asyncio.run_coroutine_threadsafe(kernel.whatsapp_service.handle_inbound(payload), kernel_loop)
+    else:
+        run_async(kernel.whatsapp_service.handle_inbound(payload))
+
+    return jsonify({"status": "received"}), 200
+
+
+@app.route("/api/whatsapp/status", methods=["GET"])
+@require_auth
+def api_whatsapp_status(user):
+    """Returns WhatsApp connection, pairing, and link status for authenticated user."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    status = run_async(kernel.whatsapp_service.get_user_status(user["id"], user=user))
+    return jsonify({"status": "success", "data": status})
+
+
+@app.route("/api/whatsapp/pair/start", methods=["POST"])
+@require_auth
+def api_whatsapp_pair_start(user):
+    """Starts Baileys WhatsApp device pairing mode (QR or 8-digit phone code)."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    data = request.json or {}
+    mode = data.get("mode", "qr")
+    phone = data.get("phone", "")
+    code, body = run_async(
+        kernel.whatsapp_service.start_bridge_pairing(user, mode=mode, raw_phone=phone),
+        timeout=15.0,
+    )
+    return jsonify(body), code
+
+
+@app.route("/api/whatsapp/pair/cancel", methods=["POST"])
+@require_auth
+def api_whatsapp_pair_cancel(user):
+    """Cancels an in-progress WhatsApp bridge pairing session."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    code, body = run_async(kernel.whatsapp_service.cancel_bridge_pairing(user), timeout=10.0)
+    return jsonify(body), code
+
+
+@app.route("/api/whatsapp/pair/logout", methods=["POST"])
+@require_auth
+def api_whatsapp_pair_logout(user):
+    """Logs out the active Baileys session and clears credentials for re-pairing."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    code, body = run_async(kernel.whatsapp_service.logout_bridge(user), timeout=10.0)
+    return jsonify(body), code
+
+
+@app.route("/api/whatsapp/link/start", methods=["POST"])
+@require_auth
+def api_whatsapp_link_start(user):
+    """Generates a 6-digit link OTP code for linking a WhatsApp number."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    data = request.json or {}
+    phone = data.get("phone", "")
+    try:
+        res = kernel.whatsapp_service.start_link(user["id"], phone)
+        return jsonify({"status": "success", "data": res})
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/api/whatsapp/link/unlink", methods=["POST"])
+@require_auth
+def api_whatsapp_link_unlink(user):
+    """Unlinks a phone number from the user account."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    data = request.json or {}
+    phone = data.get("phone", "")
+    unlinked = kernel.whatsapp_service.unlink_number(user["id"], phone)
+    return jsonify({"status": "success", "unlinked": unlinked})
+
+
+@app.route("/api/whatsapp/contacts", methods=["GET", "POST"])
+@require_auth
+def api_whatsapp_contacts(user):
+    """Lists or adds WhatsApp contacts scoped to authenticated user."""
+    uid = user["id"]
+    if request.method == "POST":
+        data = request.json or {}
+        display_name = data.get("display_name", "").strip()
+        phone = data.get("phone", "").strip()
+        aliases = data.get("aliases", [])
+        trusted = bool(data.get("trusted", True))
+        is_self = bool(data.get("is_self", False))
+
+        if not display_name or not phone:
+            return jsonify({"status": "error", "message": "Display name and phone are required"}), 400
+
+        contact = db.add_whatsapp_contact(
+            user_id=uid,
+            display_name=display_name,
+            phone_e164=phone,
+            aliases=aliases,
+            is_self=is_self,
+            trusted=trusted
+        )
+        return jsonify({"status": "success", "contact": contact})
+
+    contacts = db.get_whatsapp_contacts(uid)
+    return jsonify({"status": "success", "contacts": contacts})
+
+
+@app.route("/api/whatsapp/contacts/<contact_id>", methods=["PUT", "DELETE"])
+@require_auth
+def api_whatsapp_contact_detail(user, contact_id):
+    """Updates or deletes a specific WhatsApp contact scoped to user."""
+    uid = user["id"]
+    if request.method == "DELETE":
+        deleted = db.delete_whatsapp_contact(uid, contact_id)
+        return jsonify({"status": "success", "deleted": deleted})
+
+    data = request.json or {}
+    updated = db.update_whatsapp_contact(
+        user_id=uid,
+        contact_id=contact_id,
+        display_name=data.get("display_name"),
+        phone_e164=data.get("phone"),
+        aliases=data.get("aliases"),
+        trusted=data.get("trusted"),
+        is_self=data.get("is_self")
+    )
+    if not updated:
+        return jsonify({"status": "error", "message": "Contact not found"}), 404
+    return jsonify({"status": "success", "contact": updated})
 
 
 @app.route("/health", methods=["GET"])
@@ -863,6 +1274,7 @@ def start_kernel_background():
     asyncio.set_event_loop(kernel_loop)
     kernel = AIVAKernel(db=db, device_manager=device_manager, device_channel=device_channel)
     kernel.device_channel = device_channel
+    kernel.memory_engine.scheduler.hud_deliver = _deliver_to_hud
     device_channel.set_event_loop(kernel_loop)
 
     # Attach primary user if available

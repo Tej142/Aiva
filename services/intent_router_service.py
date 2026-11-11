@@ -1,3 +1,6 @@
+from core.memory.safety import parse_call_me_command
+
+
 class IntentRouterService:
 
     def __init__(
@@ -11,14 +14,24 @@ class IntentRouterService:
 
 
         self.memory_phrases = (
-
             "remember ",
             "remember that ",
             "don't forget ",
             "dont forget ",
             "save this ",
-            "keep in mind "
-
+            "keep in mind ",
+            "remind me ",
+            "forget ",
+            "snooze ",
+            "what do you know about",
+            "what do you remember about",
+            "list my reminders",
+            "list reminders",
+            "what are my reminders",
+            "pause learning",
+            "resume learning",
+            "turn off memory",
+            "turn on memory",
         )
 
 
@@ -31,7 +44,11 @@ class IntentRouterService:
             "start ",
             "stop ",
             "navigate to ",
-            "go to "
+            "go to ",
+            "message ",
+            "send a message ",
+            "text ",
+            "whatsapp "
 
         )
 
@@ -172,18 +189,18 @@ class IntentRouterService:
 
 
         # =====================================
-        # FAST LOCAL MEMORY WRITE
+        # FAST LOCAL MEMORY / REMINDERS
         # =====================================
 
         if clean_text.startswith(
             self.memory_phrases
-        ):
+        ) or clean_text in ("forget everything", "confirm forget everything", "pause learning", "resume learning", "turn off memory", "turn on memory") or parse_call_me_command(user_input) is not None:
 
             return {
 
-                "route": "memory_write",
+                "route": "memory",
 
-                "subtype": "memory_write",
+                "subtype": "memory",
 
                 "confidence": 1.0,
 
@@ -298,35 +315,16 @@ class IntentRouterService:
 
 
             # ---------------------------------
-            # MEMORY WRITE
+            # MEMORY (RECALL / REMEMBER / FORGET / REMINDERS)
             # ---------------------------------
 
-            if intent == "memory_write":
+            if intent in ("memory", "memory_write", "memory_read"):
 
                 return {
 
-                    "route": "memory_write",
+                    "route": "memory",
 
-                    "subtype": "memory_write",
-
-                    "confidence": 0.9,
-
-                    "source": "gemini"
-
-                }
-
-
-            # ---------------------------------
-            # MEMORY READ
-            # ---------------------------------
-
-            if intent == "memory_read":
-
-                return {
-
-                    "route": "conversation",
-
-                    "subtype": "memory_read",
+                    "subtype": "memory",
 
                     "confidence": 0.9,
 

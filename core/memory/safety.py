@@ -353,3 +353,53 @@ def scrub_vocative_identity_turn(
     if not changed:
         return content, False
     return f"{role_tag}: {body}", True
+
+
+_CALL_ME_SET_RE = re.compile(
+    r"^(?:please\s+)?(?:from\s+now\s+on,?\s+)?(?:you\s+can\s+)?(?:call\s+me|address\s+me\s+as)\s+(.+)$",
+    re.IGNORECASE,
+)
+_CALL_ME_RESET_RE = re.compile(
+    r"^(?:please\s+)?(?:reset|clear|remove|forget)\s+(?:my\s+)?preferred\s+name\b|"
+    r"^(?:please\s+)?(?:call\s+me\s+by|use)\s+(?:my\s+)?default\s+name\b",
+    re.IGNORECASE,
+)
+_CALL_ME_NON_NAME_PREFIXES = (
+    "back", "later", "soon", "tomorrow", "tonight", "today", "again",
+    "at ", "on ", "in ", "when ", "after ", "before ", "every ", "if ",
+    "there", "here", "now", "maybe", "first", "next", "a ", "an ", "the ",
+)
+
+
+def parse_call_me_command(text: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Parse `'call me X'` or preferred-name reset commands.
+
+    Returns ``("reset", "")``, ``("set", clean_name)``, or ``None`` if not a preferred-name command.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if _CALL_ME_RESET_RE.match(raw):
+        return ("reset", "")
+
+    m = _CALL_ME_SET_RE.match(raw)
+    if not m:
+        return None
+
+    cand = m.group(1).strip()
+    cand = re.sub(r"^(?:as|by\s+the\s+name\s+(?:of\s+)?)\s+", "", cand, flags=re.IGNORECASE).strip()
+    cand = cand.strip(" \t\r\n\"'“”‘’.!?")
+    if not cand or len(cand) > 40:
+        return None
+
+    low = cand.lower()
+    if any(low == p.strip() or low.startswith(p) for p in _CALL_ME_NON_NAME_PREFIXES):
+        return None
+    if len(cand.split()) > 4:
+        return None
+    if re.search(r"https?://|@|\d{3,}|<|>", cand):
+        return None
+    sensitive, _ = contains_sensitive_data(cand)
+    if sensitive:
+        return None
+    return ("set", cand)

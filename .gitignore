@@ -18,6 +18,8 @@ storage/downloads/
 # ============================================================
 node_modules/
 windows-agent/node_modules/
+services/whatsapp-bridge/node_modules/
+storage/whatsapp_auth/
 windows-agent/dist/
 dist/
 
@@ -46,3 +48,9 @@ scratch/
 .idea/
 storage/last_screenshot.png
 
+
+# SQLite migration and manual backups
+storage/*.bak*
+storage/*.db.*
+*.db.bak*
+*.db.pre_*
