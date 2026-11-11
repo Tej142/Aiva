@@ -83,6 +83,57 @@ class MistralService:
         # ----------------------------------------------------
         from urllib.parse import quote_plus
         g = goal.lower().strip()
+
+        # ─── WHATSAPP CHANNEL PRE-PARSER ─────────────────────────────────────
+        # Compound: "search/research about <X> and send ... to <Y>"
+        compound_search = re.match(
+            r"^(?:search|find|research)(?:\s+about|\s+for)?\s+(.+?)\s+and\s+(?:send|forward|message)\s+(?:the\s+details\s+|it\s+)?to\s+(.+)$",
+            g,
+            re.IGNORECASE
+        )
+        if compound_search:
+            topic = compound_search.group(1).strip()
+            dest = compound_search.group(2).strip()
+            clean_t = re.sub(r'[^a-zA-Z0-9]', '_', topic)[:20]
+            clean_d = re.sub(r'[^a-zA-Z0-9]', '_', dest)[:15]
+            return {
+                'goal': goal,
+                'workflow': [
+                    {
+                        'node_id': f'research_{clean_t}',
+                        'action': 'research',
+                        'parameters': {'query': topic, 'topic': topic},
+                        'dependencies': []
+                    },
+                    {
+                        'node_id': f'send_{clean_d}',
+                        'action': 'whatsapp_send',
+                        'parameters': {'contact': dest, 'message': f'Research details for {topic}'},
+                        'dependencies': [f'research_{clean_t}']
+                    }
+                ]
+            }
+
+        # Single: "message <contact> to <msg>" / "message <contact> <msg>"
+        msg_match = re.match(
+            r"^(?:message|send a message to|text|tell)\s+([a-zA-Z0-9\s]+?)\s+(?:to\s+|that\s+|saying\s+|:)?\s*(.+)$",
+            g,
+            re.IGNORECASE
+        )
+        if msg_match and not any(k in g for k in ['search', 'google', 'youtube', 'research']):
+            contact_target = msg_match.group(1).strip()
+            msg_body = msg_match.group(2).strip()
+            clean_c = re.sub(r'[^a-zA-Z0-9]', '_', contact_target)[:15]
+            return {
+                'goal': goal,
+                'workflow': [{
+                    'node_id': f'whatsapp_send_{clean_c}',
+                    'action': 'whatsapp_send',
+                    'parameters': {'contact': contact_target, 'message': msg_body},
+                    'dependencies': []
+                }]
+            }
+
         is_compound = any(sep in g for sep in [" and ", " then ", " also ", " after ", " & ", ", "]) or ("create" in g and "music" in g)
 
         if not is_compound:
@@ -220,6 +271,10 @@ Allowed actions:
 - visual_type (parameters: "target": "search bar / input field description", "text": "text to type", "press_enter": true) -> clicks visual field and types text
 - system_power (parameters: "power_action": "lock")
 - research (parameter: "query")
+- whatsapp_send (parameters: "contact": name/alias/phone, "message": text to send) -> sends a WhatsApp message via Baileys to a saved contact
+- whatsapp_lookup_contact (parameters: "name": contact name or alias) -> resolves contact details
+- recall (parameter: "query") -> recalls stored memories, facts, commitments, or entities for the user
+- create_reminder (parameters: "text", "due_at") -> schedules a proactive reminder (due_at can be natural time like "tomorrow 9am", "in 20 minutes", or ISO timestamp)
 - web_automation (parameter: "instruction") -> navigates to an external website, fills out forms with provided data (login, search, result lookup), and reads/returns the result. Use this action when the user provides a URL along with form data like IDs, PINs, months, semesters, etc. The "instruction" parameter should be the FULL original user message containing the URL and all form data.
 
 Return JSON in EXACTLY this format:
@@ -577,19 +632,14 @@ Output:
                 "content": """
 You are AIVA's research engine.
 
-Create a concise factual report.
-
-Include:
-- Summary
-- Important Details
-- Key Facts
-- Sources
+Respond with clean Markdown leading directly with a 3-5 line answer, followed by at most 3-5 short bulleted key facts if helpful.
+Do NOT invent fake access dates, raw URL lists, or inline [1] citation dumps unless asked — sources are attached separately in the UI.
 """
             },
 
             {
                 "role": "user",
-                "content": content
+                "content": f"Question: {query}\n\nSearch Results:\n{content}"
             }
 
         ]
@@ -679,22 +729,13 @@ Report:
 
         ]
 
-        content = self._chat_complete(messages)
+        content = self._chat_complete(messages) or "{}"
 
         try:
-
-            return json.loads(
-                content
-            )
-
-        except:
-
-            cleaned = re.sub(
-                r"```json|```",
-                "",
-                content
-            ).strip()
-
-            return json.loads(
-                cleaned
-            )
+            return json.loads(content)
+        except Exception:
+            cleaned = re.sub(r"```json|```", "", str(content)).strip()
+            try:
+                return json.loads(cleaned)
+            except Exception:
+                return {}

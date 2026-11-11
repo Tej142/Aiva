@@ -24,12 +24,15 @@ class WorkflowEngine:
     def __init__(
         self,
         event_bus,
-        task_queue
+        task_queue,
+        outcome_reporter=None,
     ):
 
         self.event_bus = event_bus
 
         self.task_queue = task_queue
+
+        self.outcome_reporter = outcome_reporter
 
         self.active_workflows = {}
 
@@ -57,8 +60,9 @@ class WorkflowEngine:
             "state/workflows/workflows.json"
         )
 
-        # Bound by kernel after init — speaks task outcome to user
-        self.outcome_reporter = None
+        # Set in __init__ or bound by kernel after init — pushes task outcome to HUD/channel/speech
+        if not getattr(self, "outcome_reporter", None):
+            self.outcome_reporter = None
 
         self.load_workflows()
 
@@ -306,11 +310,19 @@ class WorkflowEngine:
 
         workflow.status = "COMPLETED"
 
-        # ── Speak smart outcome summary ──────────────────────────────
+        # ── Push workflow result to HUD, originating channel & speech ─────
         if self.outcome_reporter and node_results:
             goal = getattr(workflow, "goal", "") or getattr(workflow, "workflow_id", "")
+            uid = getattr(workflow, "user_id", None)
+            channel = getattr(workflow, "channel", "hud") or "hud"
             asyncio.create_task(
-                self.outcome_reporter.report(goal, node_results)
+                self.outcome_reporter.report(
+                    goal,
+                    node_results,
+                    user_id=uid,
+                    channel=channel,
+                    workflow_id=getattr(workflow, "workflow_id", None),
+                )
             )
 
     async def execute_node(
@@ -326,16 +338,52 @@ class WorkflowEngine:
             "node_id": node.node_id,
             "action":  node.action,
             "status":  "completed",
-            "error":   ""
+            "error":   "",
+            "output":  None,
+            "sources": [],
         }
 
         try:
             task = {
                 "action": node.action,
+                "user_id": getattr(workflow, "user_id", None),
+                "channel": getattr(workflow, "channel", "hud"),
                 **node.parameters
             }
 
+            done_future = None
+            if getattr(self.task_queue, "has_consumer", False):
+                try:
+                    done_future = asyncio.get_running_loop().create_future()
+                    task["_done_future"] = done_future
+                except RuntimeError:
+                    done_future = None
+
             await self.task_queue.add_task(task)
+
+            if done_future is not None:
+                try:
+                    dispatch_res = await asyncio.wait_for(done_future, timeout=60.0)
+                    if isinstance(dispatch_res, dict):
+                        node_result["output"] = (
+                            dispatch_res.get("summary")
+                            or dispatch_res.get("message")
+                            or dispatch_res.get("result")
+                        )
+                        if dispatch_res.get("sources"):
+                            node_result["sources"] = dispatch_res["sources"]
+                        if dispatch_res.get("status") in ("error", "offline", "timeout", "failed"):
+                            node_result["status"] = "failed"
+                            node_result["error"] = str(
+                                dispatch_res.get("message")
+                                or dispatch_res.get("error")
+                                or dispatch_res.get("status")
+                            )
+                    elif dispatch_res is not None:
+                        node_result["output"] = str(dispatch_res)
+                except asyncio.TimeoutError:
+                    node_result["status"] = "failed"
+                    node_result["error"] = "Task execution timed out"
 
             workflow.mark_completed(node.node_id)
 

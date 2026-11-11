@@ -10,6 +10,13 @@ from services.database_service import DatabaseService
 logger = get_logger("TaskPatternService")
 
 
+_NOISY_PATTERN_PREFIXES = (
+    "hi ", "hello ", "hey ", "ahhh", "hmm", "uhh", "umm", "ok ", "okay ",
+)
+_HARDCODED_PHONE_RE = re.compile(r"\b\d{7,}\b")
+_GENERIC_SINGLE_FRAGMENT_RE = re.compile(r"^[a-z0-9_\s]{1,14}$")
+
+
 class TaskPatternService:
     def __init__(self, memory_file: str = "memory/task_patterns.json", db: DatabaseService = None):
         self.memory_file = memory_file
@@ -95,8 +102,62 @@ class TaskPatternService:
         self._save_patterns()
         return template_id
 
+    @classmethod
+    def is_clean_pattern(cls, pid: str, pdata: dict) -> bool:
+        """Filter out conversational fragments, greetings, empty templates, and hardcoded phone numbers."""
+        if not isinstance(pdata, dict):
+            return False
+        template = str(pdata.get("template_goal") or "").strip().lower()
+        nodes = pdata.get("workflow_template") or []
+        if not template or not isinstance(nodes, list) or not nodes:
+            return False
+        if _HARDCODED_PHONE_RE.search(template):
+            return False
+        if any(template.startswith(p) for p in _NOISY_PATTERN_PREFIXES):
+            return False
+        slots = pdata.get("slots") or []
+        if not slots and _GENERIC_SINGLE_FRAGMENT_RE.match(template):
+            return False
+        # Avoid hardcoded single-recipient WhatsApp patterns with no parameter slots
+        if "whatsapp" in template and not slots:
+            return False
+        for n in nodes:
+            params = (n or {}).get("parameters") or {}
+            for val in params.values():
+                if isinstance(val, str) and _HARDCODED_PHONE_RE.search(val):
+                    return False
+        return True
+
+    def get_agent_hints(self, goal: str, user_id: str = None, limit: int = 3) -> list[dict]:
+        """Return safe, clean parameterized pattern hints as optional context for Agent/Planner."""
+        if not goal:
+            return []
+        pats = self.db.get_user_task_patterns(user_id) if user_id and self.db else self.patterns
+        goal_toks = {t for t in re.findall(r"[a-z0-9]{3,}", goal.lower())}
+        if not goal_toks:
+            return []
+        scored = []
+        for pid, pdata in (pats or {}).items():
+            if not self.is_clean_pattern(pid, pdata):
+                continue
+            tmpl = str(pdata.get("template_goal") or "")
+            tmpl_toks = {t for t in re.findall(r"[a-z0-9]{3,}", tmpl.lower())}
+            overlap = len(goal_toks & tmpl_toks)
+            if overlap == 0:
+                continue
+            freq = int(pdata.get("frequency", 1) or 1)
+            scored.append((overlap * 10 + min(freq, 20), {
+                "pattern_id": pid,
+                "template_goal": tmpl,
+                "slots": pdata.get("slots") or [],
+                "actions": [n.get("action") for n in (pdata.get("workflow_template") or []) if n.get("action")],
+                "frequency": freq,
+            }))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored[:max(1, int(limit))]]
+
     def match_pattern(self, goal: str) -> dict | None:
-        """Matches a user goal against learned patterns and returns instantiated workflow nodes if matched."""
+        """Matches a user goal against clean learned patterns and returns instantiated workflow nodes if matched."""
         if not goal:
             return None
 
@@ -109,6 +170,8 @@ class TaskPatternService:
 
         # 1. Exact example match
         for pid, pdata in self.patterns.items():
+            if not self.is_clean_pattern(pid, pdata):
+                continue
             if clean_goal in pdata.get("examples", []):
                 template = pdata.get("template_goal", "")
                 slots = pdata.get("slots", [])
@@ -128,6 +191,8 @@ class TaskPatternService:
 
         # 2. Template / Slot regex match
         for pid, pdata in self.patterns.items():
+            if not self.is_clean_pattern(pid, pdata):
+                continue
             template = pdata.get("template_goal", "")
             slots = pdata.get("slots", [])
             if not slots:

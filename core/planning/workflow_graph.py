@@ -5,10 +5,18 @@ from core.planning.workflow_node import WorkflowNode
 
 class WorkflowGraph:
 
-    def __init__(self, workflow_id: str, goal: str = ""):
+    def __init__(
+        self,
+        workflow_id: str,
+        goal: str = "",
+        user_id: str = None,
+        channel: str = "hud",
+    ):
 
         self.workflow_id = workflow_id
         self.goal = goal  # Original user goal — used by OutcomeReporter
+        self.user_id = user_id
+        self.channel = channel or "hud"
 
         # ======================================
         # Graph Nodes

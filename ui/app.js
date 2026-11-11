@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initSpeechRecognition();
     initVoiceModeControls();
     initWebAuthModal();
+    initWhatsApp();
+    initMemoryControls();
     checkAuthStatus();
     pollSystemStatus();
 });
@@ -123,6 +125,9 @@ window.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'AIVA_AUTH_SESSION' && event.data.tokens) {
         setTokens(event.data.tokens);
         checkAuthStatus();
+    } else if (event.data && event.data.type === 'AIVA_NAVIGATE_TAB' && event.data.tab) {
+        const navBtn = document.querySelector(`.nav-item[data-tab="${event.data.tab}"]`);
+        if (navBtn) navBtn.click();
     }
 });
 
@@ -206,6 +211,9 @@ function onAuthSuccess(user) {
     // Load fresh data for this authenticated user
     loadMemoryData();
     loadConversationHistory();
+    connectHudWebSocket();
+    loadWhatsAppStatus();
+    startWhatsAppStatusPolling();
 }
 
 function showWebAuthModal() {
@@ -540,6 +548,10 @@ function initNavigation() {
             if (targetTab === 'memory-view') {
                 loadMemoryData();
             }
+            if (targetTab === 'whatsapp-view') {
+                loadWhatsAppStatus();
+                loadWhatsAppContacts();
+            }
         });
     });
 }
@@ -816,13 +828,9 @@ function setNeuralCoreState(state) {
 }
 
 // ---------------------------------------------------------------------
-// 5. Dual-Engine Speech Input & Neural Voice Output
+// 5. Enterprise Unified Voice Runtime & State Machine Integration
 // ---------------------------------------------------------------------
-let currentAudioPlayer = null;
 let isVoiceMuted = false;
-let mediaRecorderInstance = null;
-let audioChunks = [];
-let silenceTimer = null;
 
 function playVoiceOutput(text, audioBase64) {
     if (isVoiceMuted) {
@@ -830,58 +838,41 @@ function playVoiceOutput(text, audioBase64) {
         return;
     }
 
-    stopVoiceOutput();
-    setNeuralCoreState('speaking');
-
-    if (audioBase64) {
-        try {
-            currentAudioPlayer = new Audio('data:audio/mp3;base64,' + audioBase64);
-            currentAudioPlayer.onended = () => {
-                setNeuralCoreState('idle');
-                currentAudioPlayer = null;
-            };
-            currentAudioPlayer.onerror = (e) => {
-                console.warn('Audio base64 playback error, using speech synthesis:', e);
-                fallbackBrowserTts(text);
-            };
-            currentAudioPlayer.play().catch((err) => {
-                console.warn('Audio play prevented (autoplay policy):', err);
-                fallbackBrowserTts(text);
-            });
-            return;
-        } catch (err) {
-            console.warn('Audio init error:', err);
-        }
+    if (window.AivaVoice && window.AivaVoice.sessionManager) {
+        window.AivaVoice.sessionManager.playAudio(audioBase64, () => {
+            setNeuralCoreState('idle');
+        });
+        return;
     }
 
+    // Fallback if voice manager unavailable
     fallbackBrowserTts(text);
 }
 
 function fallbackBrowserTts(text) {
     if (!window.speechSynthesis || isVoiceMuted) {
-        setTimeout(() => setNeuralCoreState('idle'), 2500);
+        setTimeout(() => setNeuralCoreState('idle'), 2000);
         return;
     }
     try {
         window.speechSynthesis.cancel();
-        const clean = (text || '').replace(/[*_#`~\[\]>]+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\b(?:PDF|Video|Website|Blog)\b/g, '');
+        const clean = (text || '')
+            .replace(/[*_#`~\[\]>]+/g, '')
+            .replace(/https?:\/\/\S+/g, 'link on screen')
+            .replace(/\b(?:PDF|Video|Website|Blog)\b/g, '');
         const utterance = new SpeechSynthesisUtterance(clean);
         utterance.rate = 1.05;
         utterance.onend = () => setNeuralCoreState('idle');
         utterance.onerror = () => setNeuralCoreState('idle');
         window.speechSynthesis.speak(utterance);
     } catch {
-        setTimeout(() => setNeuralCoreState('idle'), 2500);
+        setTimeout(() => setNeuralCoreState('idle'), 2000);
     }
 }
 
 function stopVoiceOutput() {
-    if (currentAudioPlayer) {
-        try {
-            currentAudioPlayer.pause();
-            currentAudioPlayer.currentTime = 0;
-        } catch {}
-        currentAudioPlayer = null;
+    if (window.AivaVoice && window.AivaVoice.sessionManager) {
+        window.AivaVoice.sessionManager.stopPlayback();
     }
     if (window.speechSynthesis) {
         try { window.speechSynthesis.cancel(); } catch {}
@@ -894,160 +885,63 @@ function initSpeechRecognition() {
     const promptInput = document.getElementById('user-prompt-input');
     if (!micBtn) return;
 
-    let isRecording = false;
-    const NativeSpeech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!window.AivaVoice) {
+        console.warn('AivaVoice runtime not loaded');
+        return;
+    }
 
-    micBtn.addEventListener('click', async () => {
-        if (isRecording) {
-            stopListening();
-        } else {
-            startListening();
+    const { stateMachine, sessionManager, VoiceState, VoiceErrorCode, VoiceErrorMessages } = window.AivaVoice;
+
+    // React to state machine changes
+    stateMachine.onStateChange((state, prevState, meta) => {
+        if (state === VoiceState.LISTENING) {
+            micBtn.classList.add('listening');
+            if (promptInput) promptInput.placeholder = "Listening... Speak now";
+            setNeuralCoreState('thinking');
+        } else if (state === VoiceState.PROCESSING) {
+            micBtn.classList.remove('listening');
+            if (promptInput) promptInput.placeholder = "Processing speech with Whisper...";
+            setNeuralCoreState('thinking');
+        } else if (state === VoiceState.SPEAKING) {
+            micBtn.classList.remove('listening');
+            setNeuralCoreState('speaking');
+        } else if (state === VoiceState.FOLLOW_UP) {
+            micBtn.classList.add('listening');
+            if (promptInput) promptInput.placeholder = "Listening for follow-up... (or click to cancel)";
+            setNeuralCoreState('listening');
+        } else if (state === VoiceState.ERROR) {
+            micBtn.classList.remove('listening');
+            const code = meta.code || (stateMachine.lastError && stateMachine.lastError.code);
+            const msg = VoiceErrorMessages[code] || 'Voice operation failed.';
+            showHudToast(msg, 'error');
+            resetInputState();
+        } else if (state === VoiceState.IDLE) {
+            resetInputState();
         }
     });
 
-    async function startListening() {
-        stopVoiceOutput();
-        isRecording = true;
-        micBtn.classList.add('listening');
-        if (promptInput) {
-            promptInput.placeholder = "Listening... Speak now";
+    // Handle transcript result
+    sessionManager.onTranscriptReady = (text) => {
+        if (promptInput) promptInput.value = text;
+        sendUserMessage(text);
+        if (promptInput) promptInput.value = '';
+    };
+
+    // Click handler for mic button
+    micBtn.addEventListener('click', async () => {
+        const currentState = stateMachine.getState();
+        if (currentState === VoiceState.LISTENING || currentState === VoiceState.FOLLOW_UP) {
+            sessionManager.stopListening();
+        } else if (currentState === VoiceState.SPEAKING) {
+            // Barge-in: interrupt speech and start listening
+            sessionManager.bargeIn();
+        } else {
+            // Start listening
+            await sessionManager.startListening();
         }
-        setNeuralCoreState('thinking');
-
-        // Prefer NativeSpeech if available
-        if (NativeSpeech) {
-            try {
-                const recognition = new NativeSpeech();
-                recognition.continuous = false;
-                recognition.interimResults = true;
-                recognition.lang = 'en-US';
-
-                recognition.onresult = (event) => {
-                    const transcript = Array.from(event.results)
-                        .map(r => r[0].transcript)
-                        .join('');
-                    if (promptInput) promptInput.value = transcript;
-                    if (event.results[0].isFinal) {
-                        finishTranscript(transcript);
-                    }
-                };
-
-                recognition.onerror = (e) => {
-                    console.warn('Native speech error, switching to MediaRecorder:', e);
-                    try { recognition.stop(); } catch {}
-                    startMediaRecorder();
-                };
-
-                recognition.onend = () => {
-                    if (isRecording) {
-                        stopListening();
-                    }
-                };
-
-                recognition.start();
-                micBtn._activeRecognition = recognition;
-                return;
-            } catch (e) {
-                console.warn('Native speech start failed, falling back to MediaRecorder:', e);
-            }
-        }
-
-        // Robust fallback: MediaRecorder + Groq Whisper
-        await startMediaRecorder();
-    }
-
-    async function startMediaRecorder() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioChunks = [];
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus'
-                : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
-            
-            mediaRecorderInstance = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-
-            mediaRecorderInstance.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) {
-                    audioChunks.push(e.data);
-                }
-            };
-
-            mediaRecorderInstance.onstop = async () => {
-                stream.getTracks().forEach(t => t.stop());
-                if (audioChunks.length === 0) {
-                    resetInputState();
-                    return;
-                }
-
-                if (promptInput) promptInput.placeholder = "Transcribing with Groq Whisper...";
-                const mime = mediaRecorderInstance.mimeType || 'audio/webm';
-                const audioBlob = new Blob(audioChunks, { type: mime });
-
-                try {
-                    const formData = new FormData();
-                    formData.append('audio', audioBlob, 'mic.webm');
-
-                    const resp = await fetch('/api/voice/transcribe', {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${getAccessToken()}` },
-                        body: formData
-                    });
-                    const data = await resp.json();
-
-                    if (data.status === 'success' && data.text && data.text.trim()) {
-                        finishTranscript(data.text.trim());
-                    } else {
-                        showHudToast(data.error || 'Could not understand audio. Please try again.', 'error');
-                        resetInputState();
-                    }
-                } catch (err) {
-                    console.error('Transcription error:', err);
-                    showHudToast('Voice transcription failed.', 'error');
-                    resetInputState();
-                }
-            };
-
-            mediaRecorderInstance.start(250);
-
-            // Auto-stop after 12 seconds max
-            silenceTimer = setTimeout(() => {
-                if (isRecording) stopListening();
-            }, 12000);
-
-        } catch (err) {
-            console.error('Microphone access denied:', err);
-            showHudToast('Microphone access denied. Please allow microphone in settings.', 'error');
-            resetInputState();
-        }
-    }
-
-    function stopListening() {
-        isRecording = false;
-        if (silenceTimer) clearTimeout(silenceTimer);
-        micBtn.classList.remove('listening');
-
-        if (micBtn._activeRecognition) {
-            try { micBtn._activeRecognition.stop(); } catch {}
-            micBtn._activeRecognition = null;
-        }
-
-        if (mediaRecorderInstance && mediaRecorderInstance.state !== 'inactive') {
-            try { mediaRecorderInstance.stop(); } catch {}
-        }
-    }
-
-    function finishTranscript(text) {
-        stopListening();
-        resetInputState();
-        if (text && text.trim()) {
-            if (promptInput) promptInput.value = text;
-            sendUserMessage(text.trim());
-            if (promptInput) promptInput.value = '';
-        }
-    }
+    });
 
     function resetInputState() {
-        isRecording = false;
         micBtn.classList.remove('listening');
         if (promptInput) {
             promptInput.placeholder = "Type a command or ask anything...";
@@ -1055,7 +949,6 @@ function initSpeechRecognition() {
         setNeuralCoreState('idle');
     }
 }
-
 // ---------------------------------------------------------------------
 // 6. Voice Mode Toggles
 // ---------------------------------------------------------------------
@@ -1077,34 +970,31 @@ function initVoiceModeControls() {
 
     if (btnAdaptive) {
         btnAdaptive.addEventListener('click', async () => {
-            const ok = await sendVoiceControl('start_adaptive');
-            if (ok) {
-                setActiveModeButton(btnAdaptive);
-                if (btnToggle) btnToggle.classList.remove('muted');
-                syncVoiceStatus();
-            }
+            if (window.AivaVoice) window.AivaVoice.setMode('adaptive');
+            setActiveModeButton(btnAdaptive);
+            if (btnToggle) btnToggle.classList.remove('muted');
+            await sendVoiceControl('start_adaptive');
+            syncVoiceStatus();
         });
     }
 
     if (btnWake) {
         btnWake.addEventListener('click', async () => {
-            const ok = await sendVoiceControl('start_wakeword');
-            if (ok) {
-                setActiveModeButton(btnWake);
-                if (btnToggle) btnToggle.classList.remove('muted');
-                syncVoiceStatus();
-            }
+            if (window.AivaVoice) window.AivaVoice.setMode('wakeword');
+            setActiveModeButton(btnWake);
+            if (btnToggle) btnToggle.classList.remove('muted');
+            await sendVoiceControl('start_wakeword');
+            syncVoiceStatus();
         });
     }
 
     if (btnAll) {
         btnAll.addEventListener('click', async () => {
-            const ok = await sendVoiceControl('start_allvoice');
-            if (ok) {
-                setActiveModeButton(btnAll);
-                if (btnToggle) btnToggle.classList.remove('muted');
-                syncVoiceStatus();
-            }
+            if (window.AivaVoice) window.AivaVoice.setMode('allvoice');
+            setActiveModeButton(btnAll);
+            if (btnToggle) btnToggle.classList.remove('muted');
+            await sendVoiceControl('start_allvoice');
+            syncVoiceStatus();
         });
     }
 
@@ -1112,21 +1002,19 @@ function initVoiceModeControls() {
         btnToggle.addEventListener('click', async () => {
             const isMuted = btnToggle.classList.contains('muted');
             if (isMuted) {
-                const ok = await sendVoiceControl('start_adaptive');
-                if (ok) {
-                    btnToggle.classList.remove('muted');
-                    syncVoiceStatus();
-                }
+                if (window.AivaVoice) window.AivaVoice.setMode('adaptive');
+                btnToggle.classList.remove('muted');
+                await sendVoiceControl('start_adaptive');
+                syncVoiceStatus();
             } else {
-                const ok = await sendVoiceControl('stop');
-                if (ok) {
-                    btnToggle.classList.add('muted');
-                    const voiceBadge = document.getElementById('voice-indicator-badge');
-                    if (voiceBadge) {
-                        voiceBadge.textContent = 'MUTED';
-                        voiceBadge.className = 'badge-mini idle';
-                    }
+                if (window.AivaVoice) window.AivaVoice.setMode('muted');
+                btnToggle.classList.add('muted');
+                const voiceBadge = document.getElementById('voice-indicator-badge');
+                if (voiceBadge) {
+                    voiceBadge.textContent = 'MUTED';
+                    voiceBadge.className = 'badge-mini idle';
                 }
+                await sendVoiceControl('stop');
             }
         });
     }
@@ -1218,41 +1106,392 @@ async function loadConversationHistory() {
 }
 
 // ---------------------------------------------------------------------
-// 9. Memory & Patterns Loader (Per Authenticated User)
+// 9. Unified Memory, Entities, Reminders & Proactive HUD WebSocket
 // ---------------------------------------------------------------------
+let _memFilterType = '';
+let _memSearchQuery = '';
+let _memSearchTimer = null;
+let _hudWs = null;
+let _hudWsReconnectTimer = null;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function initMemoryControls() {
+    const searchInput = document.getElementById('mem-search-input');
+    const filterWrap = document.getElementById('mem-filter-pills');
+    const exportBtn = document.getElementById('btn-mem-export');
+    const forgetAllBtn = document.getElementById('btn-mem-forget-all');
+    const toggleEnabled = document.getElementById('mem-toggle-enabled');
+    const togglePaused = document.getElementById('mem-toggle-paused');
+    const toggleBriefing = document.getElementById('mem-toggle-briefing');
+    const quietStart = document.getElementById('mem-quiet-start');
+    const quietEnd = document.getElementById('mem-quiet-end');
+    const prefChannel = document.getElementById('mem-pref-channel');
+    const addRemBtn = document.getElementById('btn-mem-add-rem');
+
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            _memSearchQuery = searchInput.value.trim();
+            clearTimeout(_memSearchTimer);
+            _memSearchTimer = setTimeout(() => loadMemoryData(), 220);
+        });
+    }
+
+    if (filterWrap) {
+        filterWrap.querySelectorAll('.mem-pill').forEach(btn => {
+            btn.addEventListener('click', () => {
+                filterWrap.querySelectorAll('.mem-pill').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                _memFilterType = btn.getAttribute('data-type') || '';
+                loadMemoryData();
+            });
+        });
+    }
+
+    async function patchMemorySettings(patch) {
+        try {
+            const resp = await fetch('/api/memory/settings', {
+                method: 'PATCH',
+                headers: authHeaders(),
+                body: JSON.stringify(patch)
+            });
+            if (resp.ok) {
+                showHudToast('Memory settings saved');
+            }
+        } catch (e) {
+            console.warn('Settings save error:', e);
+        }
+    }
+
+    if (toggleEnabled) {
+        toggleEnabled.addEventListener('change', () => patchMemorySettings({ memory_enabled: toggleEnabled.checked }));
+    }
+    if (togglePaused) {
+        togglePaused.addEventListener('change', () => patchMemorySettings({ learning_paused: togglePaused.checked }));
+    }
+    if (toggleBriefing) {
+        toggleBriefing.addEventListener('change', () => patchMemorySettings({ morning_briefing_enabled: toggleBriefing.checked }));
+    }
+    if (quietStart) {
+        quietStart.addEventListener('change', () => patchMemorySettings({ quiet_hours_start: quietStart.value.trim() || '23:00' }));
+    }
+    if (quietEnd) {
+        quietEnd.addEventListener('change', () => patchMemorySettings({ quiet_hours_end: quietEnd.value.trim() || '07:00' }));
+    }
+    if (prefChannel) {
+        prefChannel.addEventListener('change', () => patchMemorySettings({ preferred_reminder_channel: prefChannel.value }));
+    }
+
+    if (exportBtn) {
+        exportBtn.addEventListener('click', async () => {
+            try {
+                const resp = await fetch('/api/memory/export', { headers: authHeaders() });
+                if (!resp.ok) return;
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'aiva-memory-export.json';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                showHudToast('Memory export downloaded');
+            } catch (e) {
+                console.warn('Memory export error:', e);
+            }
+        });
+    }
+
+    if (forgetAllBtn) {
+        forgetAllBtn.addEventListener('click', async () => {
+            if (!confirm('Permanently erase ALL memories, entities, and reminders for your account? This cannot be undone.')) {
+                return;
+            }
+            try {
+                const resp = await fetch('/api/memory/forget-all', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ confirm: true })
+                });
+                if (resp.ok) {
+                    showHudToast('All memories erased');
+                    loadMemoryData();
+                }
+            } catch (e) {
+                console.warn('Forget-all error:', e);
+            }
+        });
+    }
+
+    if (addRemBtn) {
+        addRemBtn.addEventListener('click', async () => {
+            const textEl = document.getElementById('mem-rem-text');
+            const dueEl = document.getElementById('mem-rem-due');
+            const text = (textEl?.value || '').trim();
+            const due_at = (dueEl?.value || '').trim();
+            if (!text || !due_at) {
+                showHudToast('Enter reminder text and due time');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/reminders', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({
+                        text,
+                        due_at,
+                        channel: prefChannel?.value || 'hud'
+                    })
+                });
+                const data = await resp.json();
+                if (resp.ok && data.status === 'success') {
+                    if (textEl) textEl.value = '';
+                    if (dueEl) dueEl.value = '';
+                    showHudToast('Reminder scheduled');
+                    loadMemoryData();
+                } else {
+                    showHudToast(data.message || data.error || 'Could not schedule reminder');
+                }
+            } catch (e) {
+                console.warn('Create reminder error:', e);
+            }
+        });
+    }
+}
+
 async function loadMemoryData() {
     try {
-        const resp = await fetch('/api/memory', { headers: authHeaders() });
+        const params = new URLSearchParams();
+        if (_memFilterType) params.set('type', _memFilterType);
+        if (_memSearchQuery) params.set('q', _memSearchQuery);
+        const qs = params.toString() ? `?${params.toString()}` : '';
+
+        const resp = await fetch(`/api/memory${qs}`, { headers: authHeaders() });
         if (!resp.ok) return;
         const data = await resp.json();
 
-        // 1. Render User Memory
-        const userFactsContainer = document.getElementById('user-facts-list');
-        const userNameDisplay = document.getElementById('user-display-name');
+        // 0. Sync Settings Controls
+        if (data.settings) {
+            const s = data.settings;
+            const toggleEnabled = document.getElementById('mem-toggle-enabled');
+            const togglePaused = document.getElementById('mem-toggle-paused');
+            const toggleBriefing = document.getElementById('mem-toggle-briefing');
+            const quietStart = document.getElementById('mem-quiet-start');
+            const quietEnd = document.getElementById('mem-quiet-end');
+            const prefChannel = document.getElementById('mem-pref-channel');
+            if (toggleEnabled) toggleEnabled.checked = s.memory_enabled !== false;
+            if (togglePaused) togglePaused.checked = !!s.learning_paused;
+            if (toggleBriefing) toggleBriefing.checked = !!s.morning_briefing_enabled;
+            if (quietStart && s.quiet_hours_start) quietStart.value = s.quiet_hours_start;
+            if (quietEnd && s.quiet_hours_end) quietEnd.value = s.quiet_hours_end;
+            if (prefChannel && s.preferred_reminder_channel) prefChannel.value = s.preferred_reminder_channel;
+        }
 
-        if (data.user_memory) {
-            const u = data.user_memory;
-            if (u.name && userNameDisplay) {
-                userNameDisplay.textContent = u.name;
-            }
+        // 1. Render Memories Grouped by Type
+        const memories = data.memories || [];
+        const grouped = data.grouped || {};
+        const memContainer = document.getElementById('memories-grouped-list');
+        const memCountEl = document.getElementById('mem-total-count');
+        if (memCountEl) memCountEl.textContent = String(memories.length);
 
-            if (userFactsContainer) {
-                userFactsContainer.innerHTML = '';
-                const entries = Object.entries(u);
-                if (entries.length === 0) {
-                    userFactsContainer.innerHTML = '<div style="color:var(--text-tertiary); font-size:12px; padding:12px;">No stored facts for this account.</div>';
-                } else {
-                    for (const [k, v] of entries) {
+        if (memContainer) {
+            memContainer.innerHTML = '';
+            const typeOrder = ['semantic', 'procedural', 'episodic', 'prospective', 'knowledge', 'working'];
+            const keys = typeOrder.filter(t => (grouped[t] || []).length > 0);
+            Object.keys(grouped).forEach(k => { if (!keys.includes(k)) keys.push(k); });
+
+            if (keys.length === 0) {
+                memContainer.innerHTML = '<div class="mem-muted-label" style="padding:12px;">No stored memories match this view.</div>';
+            } else {
+                for (const mType of keys) {
+                    const heading = document.createElement('div');
+                    heading.className = 'mem-group-heading';
+                    heading.textContent = `${mType} (${grouped[mType].length})`;
+                    memContainer.appendChild(heading);
+
+                    for (const item of grouped[mType]) {
                         const card = document.createElement('div');
                         card.className = 'memory-entry glass-card';
-                        card.innerHTML = `<strong>${formatKey(k)}</strong><p>${JSON.stringify(v)}</p>`;
-                        userFactsContainer.appendChild(card);
+                        const impPct = Math.round((item.importance ?? 0.5) * 100);
+                        card.innerHTML = `
+                            <div class="mem-entry-top">
+                                <div class="mem-meta-row">
+                                    <span class="mem-badge mem-badge-accent">${escapeHtml(item.type)}</span>
+                                    <span class="mem-badge">imp ${impPct}%</span>
+                                    <span class="mem-badge">${escapeHtml(item.source || 'user_said')}</span>
+                                    <span class="mem-badge">${escapeHtml(item.channel || 'hud')}</span>
+                                </div>
+                                <div class="mem-entry-actions">
+                                    <button class="mem-icon-btn mem-btn-edit" data-id="${escapeHtml(item.id)}">Edit</button>
+                                    <button class="mem-icon-btn danger mem-btn-del" data-id="${escapeHtml(item.id)}">Forget</button>
+                                </div>
+                            </div>
+                            <p class="mem-content-text">${escapeHtml(item.content)}</p>
+                        `;
+                        memContainer.appendChild(card);
                     }
+                }
+
+                memContainer.querySelectorAll('.mem-btn-del').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-id');
+                        const res = await fetch(`/api/memory/${encodeURIComponent(id)}`, {
+                            method: 'DELETE',
+                            headers: authHeaders()
+                        });
+                        if (res.ok) {
+                            showHudToast('Memory forgotten');
+                            loadMemoryData();
+                        }
+                    });
+                });
+
+                memContainer.querySelectorAll('.mem-btn-edit').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-id');
+                        const item = memories.find(m => m.id === id);
+                        if (!item) return;
+                        const nextText = prompt('Edit memory content:', item.content);
+                        if (nextText === null || !nextText.trim() || nextText.trim() === item.content) return;
+                        const res = await fetch(`/api/memory/${encodeURIComponent(id)}`, {
+                            method: 'PATCH',
+                            headers: authHeaders(),
+                            body: JSON.stringify({ content: nextText.trim() })
+                        });
+                        if (res.ok) {
+                            showHudToast('Memory updated');
+                            loadMemoryData();
+                        }
+                    });
+                });
+            }
+        }
+
+        // 2. Render Reminders
+        const reminders = data.reminders || [];
+        const remContainer = document.getElementById('reminders-list');
+        const remCountEl = document.getElementById('mem-reminders-count');
+        if (remCountEl) remCountEl.textContent = String(reminders.length);
+
+        if (remContainer) {
+            remContainer.innerHTML = '';
+            if (reminders.length === 0) {
+                remContainer.innerHTML = '<div class="mem-muted-label" style="padding:8px;">No reminders yet.</div>';
+            } else {
+                for (const r of reminders) {
+                    const card = document.createElement('div');
+                    card.className = 'memory-entry glass-card';
+                    const dueStr = r.due_at ? new Date(r.due_at * 1000).toLocaleString() : '—';
+                    const statusBadgeClass = r.status === 'pending' || r.status === 'snoozed'
+                        ? 'mem-badge mem-badge-warn'
+                        : 'mem-badge mem-badge-success';
+                    card.innerHTML = `
+                        <div class="mem-entry-top">
+                            <div class="mem-meta-row">
+                                <span class="${statusBadgeClass}">${escapeHtml(r.status)}</span>
+                                <span class="mem-badge">${escapeHtml(r.channel || 'hud')}</span>
+                                ${r.recurrence ? `<span class="mem-badge mem-badge-accent">${escapeHtml(r.recurrence)}</span>` : ''}
+                            </div>
+                            <div class="mem-entry-actions">
+                                ${r.status !== 'done' && r.status !== 'cancelled' ? `<button class="mem-icon-btn mem-rem-snooze" data-id="${escapeHtml(r.id)}">+10m</button>` : ''}
+                                ${r.status !== 'done' ? `<button class="mem-icon-btn mem-rem-done" data-id="${escapeHtml(r.id)}">Done</button>` : ''}
+                                <button class="mem-icon-btn danger mem-rem-cancel" data-id="${escapeHtml(r.id)}">✕</button>
+                            </div>
+                        </div>
+                        <strong>${escapeHtml(r.text)}</strong>
+                        <p>Due: ${escapeHtml(dueStr)}</p>
+                    `;
+                    remContainer.appendChild(card);
+                }
+
+                remContainer.querySelectorAll('.mem-rem-snooze').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-id');
+                        const res = await fetch(`/api/reminders/${encodeURIComponent(id)}`, {
+                            method: 'PATCH',
+                            headers: authHeaders(),
+                            body: JSON.stringify({ snooze_seconds: 600 })
+                        });
+                        if (res.ok) {
+                            showHudToast('Reminder snoozed 10 min');
+                            loadMemoryData();
+                        }
+                    });
+                });
+
+                remContainer.querySelectorAll('.mem-rem-done').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-id');
+                        const res = await fetch(`/api/reminders/${encodeURIComponent(id)}`, {
+                            method: 'PATCH',
+                            headers: authHeaders(),
+                            body: JSON.stringify({ status: 'done' })
+                        });
+                        if (res.ok) {
+                            showHudToast('Reminder marked done');
+                            loadMemoryData();
+                        }
+                    });
+                });
+
+                remContainer.querySelectorAll('.mem-rem-cancel').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-id');
+                        const res = await fetch(`/api/reminders/${encodeURIComponent(id)}`, {
+                            method: 'DELETE',
+                            headers: authHeaders()
+                        });
+                        if (res.ok) {
+                            showHudToast('Reminder cancelled');
+                            loadMemoryData();
+                        }
+                    });
+                });
+            }
+        }
+
+        // 3. Render Entities & Linked WhatsApp Contacts
+        const entities = data.entities || [];
+        const entContainer = document.getElementById('entities-list');
+        const entCountEl = document.getElementById('mem-entities-count');
+        if (entCountEl) entCountEl.textContent = String(entities.length);
+
+        if (entContainer) {
+            entContainer.innerHTML = '';
+            if (entities.length === 0) {
+                entContainer.innerHTML = '<div class="mem-muted-label" style="padding:8px;">No entities tracked yet.</div>';
+            } else {
+                for (const ent of entities) {
+                    const card = document.createElement('div');
+                    card.className = 'memory-entry glass-card';
+                    const aliases = (ent.aliases || []).join(', ');
+                    const waBadge = ent.whatsapp_contact_id
+                        ? '<span class="mem-badge mem-badge-success">WhatsApp Linked</span>'
+                        : '';
+                    card.innerHTML = `
+                        <div class="mem-entry-top">
+                            <strong>${escapeHtml(ent.name)}</strong>
+                            <div class="mem-meta-row">
+                                <span class="mem-badge mem-badge-accent">${escapeHtml(ent.kind)}</span>
+                                ${waBadge}
+                            </div>
+                        </div>
+                        ${aliases ? `<p>Aliases: ${escapeHtml(aliases)}</p>` : ''}
+                    `;
+                    entContainer.appendChild(card);
                 }
             }
         }
 
-        // 2. Render Task Patterns
+        // 4. Render Learned Task Patterns
         const recipesContainer = document.getElementById('task-recipes-list');
         const patternCountEl = document.getElementById('stat-patterns-count');
 
@@ -1268,16 +1507,64 @@ async function loadMemoryData() {
                 const action = details.action || details.intent || 'Workflow';
                 card.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <strong>${patternName}</strong>
-                        <span class="cap-badge">${action}</span>
+                        <strong>${escapeHtml(patternName)}</strong>
+                        <span class="cap-badge">${escapeHtml(action)}</span>
                     </div>
-                    <small style="color:var(--text-muted);">${JSON.stringify(details)}</small>
+                    <small style="color:var(--text-muted);">${escapeHtml(JSON.stringify(details))}</small>
                 `;
                 recipesContainer.appendChild(card);
             }
         }
     } catch (e) {
         console.warn('Memory load error:', e);
+    }
+}
+
+function connectHudWebSocket() {
+    const token = getAccessToken();
+    if (!token) return;
+    if (_hudWs && (_hudWs.readyState === WebSocket.OPEN || _hudWs.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//${window.location.host}/ws/hud?token=${encodeURIComponent(token)}`;
+    try {
+        const ws = new WebSocket(wsUrl);
+        _hudWs = ws;
+
+        ws.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload.type === 'connected') return;
+                if (payload.type === 'memory_notification' || payload.type === 'reminder' || payload.type === 'morning_briefing' || payload.type === 'workflow_result') {
+                    const text = payload.text || 'Proactive update';
+                    const speechText = payload.speech_text || text;
+                    showHudToast(speechText.slice(0, 120));
+                    const tag = payload.type === 'morning_briefing'
+                        ? 'briefing'
+                        : (payload.type === 'workflow_result' ? 'task' : 'reminder');
+                    const sources = Array.isArray(payload.sources) && payload.sources.length ? payload.sources : null;
+                    appendChatMessage('aiva', text, sources, tag);
+                    if (payload.speak && !isVoiceMuted) {
+                        fallbackBrowserTts(speechText);
+                    }
+                    const memPane = document.getElementById('memory-view');
+                    if (memPane && memPane.classList.contains('active')) {
+                        loadMemoryData();
+                    }
+                }
+            } catch {}
+        };
+
+        ws.onclose = () => {
+            _hudWs = null;
+            clearTimeout(_hudWsReconnectTimer);
+            if (getAccessToken()) {
+                _hudWsReconnectTimer = setTimeout(() => connectHudWebSocket(), 8000);
+            }
+        };
+    } catch (e) {
+        console.warn('HUD WebSocket error:', e);
     }
 }
 
@@ -1303,4 +1590,620 @@ async function pollSystemStatus() {
             }
         }
     } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 10. WhatsApp Channel, Pairing Mode & Contact Management
+// ---------------------------------------------------------------------
+let _waPairingMode = 'qr';
+let _waSlowPollTimer = null;
+let _waFastPollTimer = null;
+let _waWasPairing = false;
+
+function escapeWaHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function startWhatsAppStatusPolling() {
+    if (_waSlowPollTimer) return;
+    _waSlowPollTimer = setInterval(() => {
+        if (getAccessToken()) {
+            loadWhatsAppStatus();
+        }
+    }, 15000);
+}
+
+function startFastPairingPoll() {
+    stopFastPairingPoll();
+    _waFastPollTimer = setInterval(() => {
+        loadWhatsAppStatus();
+    }, 1500);
+}
+
+function stopFastPairingPoll() {
+    if (_waFastPollTimer) {
+        clearInterval(_waFastPollTimer);
+        _waFastPollTimer = null;
+    }
+}
+
+function updatePairingModeUi(mode) {
+    _waPairingMode = mode === 'code' ? 'code' : 'qr';
+    const tabQr = document.getElementById('wa-pair-tab-qr');
+    const tabCode = document.getElementById('wa-pair-tab-code');
+    const phoneRow = document.getElementById('wa-pair-phone-row');
+    const startBtn = document.getElementById('wa-btn-pair-start');
+
+    if (tabQr) tabQr.classList.toggle('active', _waPairingMode === 'qr');
+    if (tabCode) tabCode.classList.toggle('active', _waPairingMode === 'code');
+    if (phoneRow) phoneRow.style.display = _waPairingMode === 'code' ? 'flex' : 'none';
+    if (startBtn && !startBtn.disabled) {
+        startBtn.textContent = _waPairingMode === 'code' ? 'Generate 8-Digit Code' : 'Start QR Pairing';
+    }
+}
+
+function renderPairingState(pairing, isConnected, isOwner) {
+    const phaseBadge = document.getElementById('wa-pair-phase-badge');
+    const cancelBtn = document.getElementById('wa-btn-pair-cancel');
+    const startBtn = document.getElementById('wa-btn-pair-start');
+    const logoutBtn = document.getElementById('wa-btn-pair-logout');
+    const ownerNote = document.getElementById('wa-pair-owner-note');
+    const outputBox = document.getElementById('wa-pair-output');
+    const statusMsg = document.getElementById('wa-pair-status-msg');
+    const qrBox = document.getElementById('wa-pair-qr-box');
+    const qrImg = document.getElementById('wa-pair-qr-img');
+    const codeBox = document.getElementById('wa-pair-code-box');
+    const codeText = document.getElementById('wa-pair-code-text');
+
+    const p = pairing || {};
+    const active = Boolean(p.active);
+    const phase = p.phase || 'idle';
+
+    if (ownerNote) {
+        if (isOwner === false) {
+            ownerNote.style.display = 'block';
+            ownerNote.textContent = 'Only the primary AIVA account owner can pair or reset the bridge device. You can still link your personal number below.';
+        } else {
+            ownerNote.style.display = 'none';
+        }
+    }
+
+    if (startBtn) startBtn.disabled = isOwner === false;
+    if (logoutBtn) logoutBtn.disabled = isOwner === false;
+    if (cancelBtn) {
+        cancelBtn.style.display = active && isOwner !== false ? 'inline-flex' : 'none';
+        cancelBtn.disabled = isOwner === false;
+    }
+
+    if (phaseBadge) {
+        phaseBadge.className = 'wa-phase-badge';
+        if (active) {
+            phaseBadge.classList.add('active');
+            phaseBadge.textContent = phase === 'restarting' ? 'Connecting' : 'Pairing Active';
+        } else if (isConnected) {
+            phaseBadge.classList.add('connected');
+            phaseBadge.textContent = 'Paired';
+        } else if (phase === 'error') {
+            phaseBadge.classList.add('danger');
+            phaseBadge.textContent = 'Error';
+        } else {
+            phaseBadge.textContent = 'Idle';
+        }
+    }
+
+    if (startBtn && !startBtn.dataset.loading) {
+        if (isConnected) {
+            startBtn.textContent = _waPairingMode === 'code' ? 'Re-Pair via Code' : 'Re-Pair via QR';
+        } else {
+            startBtn.textContent = _waPairingMode === 'code' ? 'Generate 8-Digit Code' : 'Start QR Pairing';
+        }
+    }
+
+    if (!outputBox) return;
+
+    if (active) {
+        outputBox.style.display = 'flex';
+        startFastPairingPoll();
+        _waWasPairing = true;
+
+        if (phase === 'qr_ready' && p.qr_data_url) {
+            if (qrBox) qrBox.style.display = 'flex';
+            if (codeBox) codeBox.style.display = 'none';
+            if (qrImg && qrImg.src !== p.qr_data_url) qrImg.src = p.qr_data_url;
+            if (statusMsg) {
+                statusMsg.className = 'wa-pair-status-msg';
+                statusMsg.textContent = 'Waiting for QR scan (refreshes automatically if needed)...';
+            }
+        } else if (phase === 'code_ready' && p.pairing_code) {
+            if (qrBox) qrBox.style.display = 'none';
+            if (codeBox) codeBox.style.display = 'flex';
+            if (codeText) codeText.textContent = p.pairing_code;
+            if (statusMsg) {
+                statusMsg.className = 'wa-pair-status-msg';
+                statusMsg.textContent = `Enter this code in WhatsApp Mobile${p.target_phone_masked ? ' for ' + p.target_phone_masked : ''}.`;
+            }
+        } else if (phase === 'restarting') {
+            if (qrBox) qrBox.style.display = 'none';
+            if (codeBox) codeBox.style.display = 'none';
+            if (statusMsg) {
+                statusMsg.className = 'wa-pair-status-msg';
+                statusMsg.textContent = 'Device accepted! Finishing secure WhatsApp Web handshake...';
+            }
+        } else {
+            if (qrBox) qrBox.style.display = 'none';
+            if (codeBox) codeBox.style.display = 'none';
+            if (statusMsg) {
+                statusMsg.className = 'wa-pair-status-msg';
+                statusMsg.textContent = 'Initializing WhatsApp pairing socket...';
+            }
+        }
+        return;
+    }
+
+    stopFastPairingPoll();
+
+    if (_waWasPairing && isConnected) {
+        _waWasPairing = false;
+        showHudToast('WhatsApp bridge paired and connected!');
+    } else if (!active && phase !== 'error') {
+        _waWasPairing = false;
+    }
+
+    if (phase === 'error' && p.error) {
+        outputBox.style.display = 'flex';
+        if (qrBox) qrBox.style.display = 'none';
+        if (codeBox) codeBox.style.display = 'none';
+        if (statusMsg) {
+            statusMsg.className = 'wa-pair-status-msg error';
+            statusMsg.textContent = p.error;
+        }
+    } else {
+        outputBox.style.display = 'none';
+    }
+}
+
+function updateGlobalWhatsAppStatusUi(bridge) {
+    const hudPill = document.getElementById('wa-hud-status-pill');
+    const hudDot = document.getElementById('wa-hud-dot');
+    const hudLabel = document.getElementById('wa-hud-label');
+    const navDot = document.getElementById('wa-nav-dot');
+
+    const status = bridge?.status || 'bridge_offline';
+    const isConnected = Boolean(bridge?.connected);
+    const isPairing = status === 'pairing' || Boolean(bridge?.pairing?.active);
+
+    let stateClass = 'danger';
+    let shortText = 'WA: Offline';
+
+    if (isConnected) {
+        stateClass = 'connected';
+        shortText = 'WA: Connected';
+    } else if (isPairing) {
+        stateClass = 'pairing';
+        shortText = 'WA: Pairing';
+    } else if (status === 're_pair_required') {
+        stateClass = 'danger';
+        shortText = 'WA: Re-Pair';
+    } else if (status === 'connecting' || status === 'disconnected') {
+        stateClass = 'warning';
+        shortText = 'WA: Connecting';
+    }
+
+    if (hudPill) {
+        hudPill.className = `wa-hud-pill ${stateClass}`;
+        hudPill.title = bridge?.error
+            ? `WhatsApp (${status}): ${bridge.error}`
+            : `WhatsApp: ${status}${bridge?.phone_masked ? ' (' + bridge.phone_masked + ')' : ''}`;
+    }
+    if (hudDot) hudDot.className = `wa-hud-dot ${stateClass}`;
+    if (hudLabel) hudLabel.textContent = shortText;
+    if (navDot) {
+        navDot.className = `wa-nav-dot ${stateClass}`;
+        navDot.title = shortText;
+    }
+
+    if (window.parent && window.parent !== window) {
+        try {
+            window.parent.postMessage({
+                type: 'AIVA_WHATSAPP_STATUS',
+                connected: isConnected,
+                status,
+                stateClass,
+                shortText,
+                phone_masked: bridge?.phone_masked || ''
+            }, '*');
+        } catch {}
+    }
+}
+
+function initWhatsApp() {
+    const hudPill = document.getElementById('wa-hud-status-pill');
+    const refreshBtn = document.getElementById('wa-btn-refresh-status');
+    const tabQr = document.getElementById('wa-pair-tab-qr');
+    const tabCode = document.getElementById('wa-pair-tab-code');
+    const pairStartBtn = document.getElementById('wa-btn-pair-start');
+    const pairCancelBtn = document.getElementById('wa-btn-pair-cancel');
+    const pairLogoutBtn = document.getElementById('wa-btn-pair-logout');
+    const copyPairCodeBtn = document.getElementById('wa-btn-copy-pair-code');
+
+    const startLinkBtn = document.getElementById('wa-btn-start-link');
+    const phoneInput = document.getElementById('wa-link-phone-input');
+    const addContactBtn = document.getElementById('wa-btn-add-contact');
+
+    if (hudPill) {
+        hudPill.addEventListener('click', () => {
+            document.getElementById('nav-whatsapp')?.click();
+        });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => loadWhatsAppStatus());
+    }
+
+    if (tabQr) {
+        tabQr.addEventListener('click', () => updatePairingModeUi('qr'));
+    }
+    if (tabCode) {
+        tabCode.addEventListener('click', () => updatePairingModeUi('code'));
+    }
+
+    if (pairStartBtn) {
+        pairStartBtn.addEventListener('click', async () => {
+            const pairPhone = document.getElementById('wa-pair-phone-input')?.value.trim() || '';
+            if (_waPairingMode === 'code' && !pairPhone) {
+                alert('Enter the WhatsApp phone number including country code (e.g. 919493867075).');
+                return;
+            }
+            pairStartBtn.disabled = true;
+            pairStartBtn.dataset.loading = '1';
+            pairStartBtn.textContent = 'Starting Pairing...';
+            try {
+                const res = await fetch('/api/whatsapp/pair/start', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ mode: _waPairingMode, phone: pairPhone })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    renderPairingState(data.data?.pairing, false, true);
+                    startFastPairingPoll();
+                    loadWhatsAppStatus();
+                } else {
+                    alert(data.message || 'Failed to start WhatsApp pairing mode.');
+                }
+            } catch (err) {
+                alert('Network error starting WhatsApp pairing.');
+            } finally {
+                delete pairStartBtn.dataset.loading;
+                pairStartBtn.disabled = false;
+                updatePairingModeUi(_waPairingMode);
+            }
+        });
+    }
+
+    if (pairCancelBtn) {
+        pairCancelBtn.addEventListener('click', async () => {
+            pairCancelBtn.disabled = true;
+            try {
+                await fetch('/api/whatsapp/pair/cancel', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({})
+                });
+                stopFastPairingPoll();
+                _waWasPairing = false;
+                loadWhatsAppStatus();
+            } catch {
+                alert('Failed to cancel pairing.');
+            } finally {
+                pairCancelBtn.disabled = false;
+            }
+        });
+    }
+
+    if (pairLogoutBtn) {
+        pairLogoutBtn.addEventListener('click', async () => {
+            if (!confirm('Disconnect AIVA from the currently paired WhatsApp device and clear saved session keys?')) {
+                return;
+            }
+            pairLogoutBtn.disabled = true;
+            try {
+                const res = await fetch('/api/whatsapp/pair/logout', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showHudToast('WhatsApp session unpaired. Ready for fresh pairing.');
+                    loadWhatsAppStatus();
+                } else {
+                    alert(data.message || 'Failed to unpair WhatsApp bridge.');
+                }
+            } catch {
+                alert('Network error unpairing WhatsApp bridge.');
+            } finally {
+                pairLogoutBtn.disabled = false;
+            }
+        });
+    }
+
+    if (copyPairCodeBtn) {
+        copyPairCodeBtn.addEventListener('click', async () => {
+            const val = document.getElementById('wa-pair-code-text')?.textContent.trim();
+            if (!val) return;
+            try {
+                await navigator.clipboard.writeText(val);
+                showHudToast('Pairing code copied to clipboard');
+            } catch {}
+        });
+    }
+
+    if (startLinkBtn && phoneInput) {
+        startLinkBtn.addEventListener('click', async () => {
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                alert('Please enter a phone number with country code (e.g. 919876543210).');
+                return;
+            }
+            startLinkBtn.disabled = true;
+            startLinkBtn.textContent = 'Generating...';
+            try {
+                const res = await fetch('/api/whatsapp/link/start', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ phone })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    const codeDisplay = document.getElementById('wa-code-display');
+                    const codeText = document.getElementById('wa-code-text');
+                    if (codeDisplay && codeText) {
+                        codeText.textContent = data.data.link_code;
+                        codeDisplay.style.display = 'block';
+                    }
+                    loadWhatsAppStatus();
+                } else {
+                    alert(data.message || 'Failed to start linking.');
+                }
+            } catch (err) {
+                alert('Network error while starting WhatsApp link.');
+            } finally {
+                startLinkBtn.disabled = false;
+                startLinkBtn.textContent = 'Generate Code';
+            }
+        });
+    }
+
+    if (addContactBtn) {
+        addContactBtn.addEventListener('click', async () => {
+            const name = document.getElementById('wa-new-name')?.value.trim();
+            const phone = document.getElementById('wa-new-phone')?.value.trim();
+            const aliasesRaw = document.getElementById('wa-new-aliases')?.value.trim() || '';
+            const trusted = document.getElementById('wa-new-trusted')?.checked ?? true;
+
+            if (!name || !phone) {
+                alert('Please provide both contact name and phone number.');
+                return;
+            }
+
+            const aliases = aliasesRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+            addContactBtn.disabled = true;
+            try {
+                const res = await fetch('/api/whatsapp/contacts', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ display_name: name, phone, aliases, trusted })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    if (document.getElementById('wa-new-name')) document.getElementById('wa-new-name').value = '';
+                    if (document.getElementById('wa-new-phone')) document.getElementById('wa-new-phone').value = '';
+                    if (document.getElementById('wa-new-aliases')) document.getElementById('wa-new-aliases').value = '';
+                    loadWhatsAppContacts();
+                } else {
+                    alert(data.message || 'Failed to add contact.');
+                }
+            } catch (err) {
+                alert('Error adding contact.');
+            } finally {
+                addContactBtn.disabled = false;
+            }
+        });
+    }
+}
+
+async function loadWhatsAppStatus() {
+    const badge = document.getElementById('wa-bridge-badge');
+    const details = document.getElementById('wa-status-details');
+    const activeLinksContainer = document.getElementById('wa-active-links-list');
+
+    try {
+        const res = await fetch('/api/whatsapp/status', { headers: authHeaders() });
+        if (!res.ok) return;
+        const respData = await res.json();
+        const data = respData.data || {};
+        const bridge = data.bridge || {};
+        const pairing = bridge.pairing || {};
+        const isConnected = Boolean(bridge.connected);
+
+        updateGlobalWhatsAppStatusUi(bridge);
+        renderPairingState(pairing, isConnected, data.is_owner);
+
+        if (badge) {
+            if (isConnected) {
+                badge.textContent = 'Connected (Baileys)';
+                badge.style.background = 'var(--status-success-bg)';
+                badge.style.color = 'var(--success)';
+            } else if (bridge.status === 'pairing' || pairing.active) {
+                badge.textContent = 'Pairing Mode Active';
+                badge.style.background = 'var(--status-info-bg)';
+                badge.style.color = 'var(--info)';
+            } else if (bridge.status === 're_pair_required') {
+                badge.textContent = 'Re-Pair Required';
+                badge.style.background = 'var(--status-danger-bg)';
+                badge.style.color = 'var(--danger)';
+            } else if (bridge.status === 'bridge_offline') {
+                badge.textContent = 'Bridge Offline';
+                badge.style.background = 'var(--status-danger-bg)';
+                badge.style.color = 'var(--danger)';
+            } else {
+                badge.textContent = 'Connecting / Disconnected';
+                badge.style.background = 'var(--status-warning-bg)';
+                badge.style.color = 'var(--warning)';
+            }
+        }
+
+        if (details) {
+            const pairedPhone = bridge.phone_masked || bridge.configured_phone_masked || 'Not Paired';
+            const errorHtml = (!isConnected && bridge.error)
+                ? `<div class="wa-error-alert">${escapeWaHtml(bridge.error)}</div>`
+                : '';
+            details.innerHTML = `
+                <div><strong>Bridge Status:</strong> ${escapeWaHtml(bridge.status || 'offline')}</div>
+                <div><strong>AIVA Device Phone:</strong> ${escapeWaHtml(pairedPhone)}</div>
+                <div><strong>Authorized Phone Links:</strong> ${data.links?.length || 0} active</div>
+                ${errorHtml}
+            `;
+        }
+
+        if (activeLinksContainer) {
+            activeLinksContainer.innerHTML = '';
+            const links = data.links || [];
+            if (links.length > 0) {
+                const header = document.createElement('div');
+                header.style.fontSize = '0.8rem';
+                header.style.fontWeight = '600';
+                header.style.color = 'var(--text-2)';
+                header.textContent = 'Linked Numbers:';
+                activeLinksContainer.appendChild(header);
+
+                links.forEach(l => {
+                    const row = document.createElement('div');
+                    row.style.display = 'flex';
+                    row.style.justifyContent = 'space-between';
+                    row.style.alignItems = 'center';
+                    row.style.padding = '6px 10px';
+                    row.style.background = 'var(--elevated)';
+                    row.style.borderRadius = 'var(--radius-sm)';
+                    row.style.fontSize = '0.8rem';
+                    row.style.border = '1px solid var(--border)';
+
+                    const isVer = l.status === 'verified';
+                    const statusPill = isVer
+                        ? `<span style="color:var(--success); margin-left:6px;">● Verified</span>`
+                        : `<span style="color:var(--warning); margin-left:6px;">● Pending (${escapeWaHtml(l.link_code || '')})</span>`;
+                    const phoneDisplay = l.phone_masked || (l.phone_e164 ? `+${l.phone_e164}` : '');
+
+                    row.innerHTML = `
+                        <div>
+                            <strong>${escapeWaHtml(phoneDisplay)}</strong>
+                            ${statusPill}
+                        </div>
+                        <button class="wa-btn-unlink" data-phone="${escapeWaHtml(l.phone_e164)}" style="background:transparent; border:1px solid var(--border); color:var(--text-2); padding:3px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;">Unlink</button>
+                    `;
+                    activeLinksContainer.appendChild(row);
+                });
+
+                activeLinksContainer.querySelectorAll('.wa-btn-unlink').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const phone = btn.getAttribute('data-phone');
+                        if (confirm('Unlink this WhatsApp number from AIVA?')) {
+                            await fetch('/api/whatsapp/link/unlink', {
+                                method: 'POST',
+                                headers: authHeaders(),
+                                body: JSON.stringify({ phone })
+                            });
+                            loadWhatsAppStatus();
+                        }
+                    });
+                });
+            }
+        }
+    } catch (e) {
+        console.warn('Error loading WhatsApp status:', e);
+    }
+}
+
+async function loadWhatsAppContacts() {
+    const list = document.getElementById('wa-contacts-list');
+    if (!list) return;
+
+    try {
+        const res = await fetch('/api/whatsapp/contacts', { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const contacts = data.contacts || [];
+
+        list.innerHTML = '';
+        if (contacts.length === 0) {
+            list.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:12px;">No contacts saved yet. Add one above or via WhatsApp chat.</div>`;
+            return;
+        }
+
+        contacts.forEach(c => {
+            const item = document.createElement('div');
+            item.style.display = 'flex';
+            item.style.justifyContent = 'space-between';
+            item.style.alignItems = 'center';
+            item.style.padding = '8px 12px';
+            item.style.background = 'var(--elevated)';
+            item.style.borderRadius = 'var(--radius-sm)';
+            item.style.border = '1px solid var(--border)';
+            item.style.fontSize = '0.8rem';
+
+            const aliasesHtml = (c.aliases || []).map(a =>
+                `<span style="background:var(--accent-subtle); color:var(--accent-light); padding:1px 6px; border-radius:4px; font-size:0.7rem; margin-right:4px;">${escapeWaHtml(a)}</span>`
+            ).join('');
+
+            item.innerHTML = `
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <div><strong>${escapeWaHtml(c.display_name)}</strong> <span style="color:var(--text-2); margin-left:6px;">+${escapeWaHtml(c.phone_e164)}</span></div>
+                    <div style="margin-top:2px;">${aliasesHtml}</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.75rem; color:var(--text-2);" title="Send messages without confirmation prompt">
+                        <input type="checkbox" class="wa-toggle-trusted" data-id="${escapeWaHtml(c.id)}" ${c.trusted ? 'checked' : ''}>
+                        <span>Trusted</span>
+                    </label>
+                    <button class="wa-btn-del-contact" data-id="${escapeWaHtml(c.id)}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:0.9rem;" title="Delete Contact">✕</button>
+                </div>
+            `;
+
+            list.appendChild(item);
+        });
+
+        list.querySelectorAll('.wa-toggle-trusted').forEach(chk => {
+            chk.addEventListener('change', async () => {
+                const id = chk.getAttribute('data-id');
+                const trusted = chk.checked;
+                await fetch(`/api/whatsapp/contacts/${id}`, {
+                    method: 'PUT',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ trusted })
+                });
+            });
+        });
+
+        list.querySelectorAll('.wa-btn-del-contact').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.getAttribute('data-id');
+                if (confirm('Delete this WhatsApp contact?')) {
+                    await fetch(`/api/whatsapp/contacts/${id}`, {
+                        method: 'DELETE',
+                        headers: authHeaders()
+                    });
+                    loadWhatsAppContacts();
+                }
+            });
+        });
+
+    } catch (e) {
+        console.warn('Error loading WhatsApp contacts:', e);
+    }
 }

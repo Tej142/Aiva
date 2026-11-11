@@ -148,6 +148,8 @@ class MemoryEngine:
             sid = turn.get("session_id") or session_id
             u_text = turn.get("user") or turn.get("user_message") or turn.get("input")
             a_text = turn.get("assistant") or turn.get("assistant_response") or turn.get("response")
+            ref_id = turn.get("ref_id")
+            is_tool_output = bool(turn.get("is_tool_output"))
             single_role = turn.get("role")
             single_text = turn.get("content") or turn.get("text")
             if u_text:
@@ -160,6 +162,8 @@ class MemoryEngine:
                     channel=chan,
                     session_id=sid,
                     enqueue_extraction=False,
+                    ref_id=ref_id,
+                    is_tool_output=is_tool_output,
                 )
             if single_role and single_text:
                 self.extractor.append_turn(
@@ -169,6 +173,8 @@ class MemoryEngine:
                     channel=chan,
                     session_id=sid,
                     enqueue_extraction=(str(single_role) == "user"),
+                    ref_id=ref_id,
+                    is_tool_output=is_tool_output,
                 )
         elif isinstance(turn, str):
             self.extractor.append_turn(user_id, "user", turn, channel=channel, session_id=session_id)
@@ -587,8 +593,10 @@ class MemoryEngine:
         topic: str,
         summary: str,
         facts: Optional[List[str]] = None,
-        ttl_days: int = 30,
+        ttl_days: int = 7,
         channel: str = Channel.HUD.value,
+        source_url: str = "",
+        retrieved_at: Optional[str] = None,
     ) -> Optional[MemoryItem]:
         """Store web/research output strictly as `knowledge` with `source='web'` and `expires_at`."""
         if not user_id or not summary:
@@ -601,12 +609,16 @@ class MemoryEngine:
         full_text = f"{topic}: {summary}"
         if facts:
             full_text += " (" + "; ".join(str(f) for f in facts[:5]) + ")"
+        if source_url:
+            full_text += f" [source: {source_url}]"
+        if retrieved_at:
+            full_text += f" [retrieved_at: {retrieved_at}]"
         item = MemoryItem(
             id=new_id(),
             user_id=user_id,
             type=MemoryType.KNOWLEDGE.value,
             content=full_text.strip(),
-            summary=summary[:200],
+            summary=summary[:240],
             entities=[topic] if topic else [],
             importance=0.55,
             confidence=0.8,
@@ -614,7 +626,7 @@ class MemoryEngine:
             channel=channel,
             created_at=now,
             last_accessed=now,
-            expires_at=now + ttl_days * 86400.0,
+            expires_at=now + max(1, int(ttl_days)) * 86400.0,
             status=MemoryStatus.ACTIVE.value,
         )
         ok, _ = self.store.insert_memory(item, is_verified_user=True)

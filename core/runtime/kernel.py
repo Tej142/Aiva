@@ -27,22 +27,14 @@ from core.interaction.input_handler import InputHandler
 from core.interaction.chat_runtime import ChatRuntime
 
 from services.browser_service import BrowserService
-from services.memory_service import MemoryService
 from services.session_service import SessionService
 
 from services.mistral_service import MistralService
 from services.tavily_service import TavilyService
-from services.knowledge_service import KnowledgeService
-
-from services.recall_service import RecallService
 from services.reasoning_service import ReasoningService
 
 from services.context_resolver_service import (
     ContextResolverService
-)
-
-from services.conversation_memory_service import (
-    ConversationMemoryService
 )
 
 from services.conversation_service import (
@@ -53,20 +45,12 @@ from services.intent_router_service import (
     IntentRouterService
 )
 
-from services.user_memory_service import (
-    UserMemoryService
-)
-
 from services.task_pattern_service import (
     TaskPatternService
 )
 
 from core.observation.workflow_observer import (
     WorkflowObserver
-)
-
-from services.memory_extraction_service import (
-    MemoryExtractionService
 )
 
 from services.intent_classifier_service import (
@@ -81,13 +65,11 @@ from services.outcome_reporter_service import (
     OutcomeReporterService
 )
 
-from services.passive_memory_service import (
-    PassiveMemoryService
-)
-
 from services.web_automation_service import (
     WebAutomationService
 )
+
+from core.memory import MemoryEngine
 
 
 class AIVAKernel:
@@ -134,9 +116,11 @@ class AIVAKernel:
             WebAutomationService()
         )
 
-        self.memory_service = (
-            MemoryService()
-        )
+        self.memory_engine = MemoryEngine(db=self.db)
+        try:
+            self.memory_engine.migrate_legacy_data()
+        except Exception as _mig_err:
+            print(f"[AIVA] Memory migration notice: {_mig_err}")
 
         self.session_service = (
             SessionService()
@@ -211,44 +195,6 @@ class AIVAKernel:
             IntentClassifierService()
         )
 
-        self.user_memory_service = (
-            UserMemoryService()
-        )
-
-
-        self.memory_extraction_service = (
-            MemoryExtractionService()
-        )
-
-
-        # =====================================
-        # KNOWLEDGE SERVICE
-        # =====================================
-
-        self.knowledge_service = (
-
-            KnowledgeService(
-
-                self.memory_service,
-
-                self.tavily_service,
-
-                self.mistral_service
-
-            )
-
-        )
-
-
-        # =====================================
-        # MEMORY SERVICES
-        # =====================================
-
-        self.recall_service = (
-            RecallService()
-        )
-
-
         self.reasoning_service = (
 
             ReasoningService(
@@ -258,12 +204,6 @@ class AIVAKernel:
             )
 
         )
-
-
-        self.conversation_memory_service = (
-            ConversationMemoryService()
-        )
-
 
         # =====================================
         # INTELLIGENCE ROUTING
@@ -281,17 +221,15 @@ class AIVAKernel:
 
         )
 
-
         self.context_resolver_service = (
 
             ContextResolverService(
 
-                self.conversation_memory_service
+                self.memory_engine
 
             )
 
         )
-
 
         self.task_pattern_service = (
             TaskPatternService()
@@ -312,11 +250,7 @@ class AIVAKernel:
             OutcomeReporterService()
         )
 
-        self.passive_memory_service = (
-            PassiveMemoryService(
-                user_memory_service=self.user_memory_service
-            )
-        )
+        _get_uid = lambda: getattr(self, "active_user_id", None)
 
         # =====================================
         # AGENT MANAGER
@@ -325,7 +259,6 @@ class AIVAKernel:
         self.agent_manager = (
             AgentManager()
         )
-
 
         # =====================================
         # PLANNER AGENT
@@ -339,38 +272,21 @@ class AIVAKernel:
 
                 state_manager=self.state,
 
-                memory_service=(
-                    self.memory_service
-                ),
+                memory_engine=self.memory_engine,
 
-                mistral_service=(
-                    self.mistral_service
-                ),
+                mistral_service=self.mistral_service,
 
-                recall_service=(
-                    self.recall_service
-                ),
+                reasoning_service=self.reasoning_service,
 
-                reasoning_service=(
-                    self.reasoning_service
-                ),
+                context_resolver_service=self.context_resolver_service,
 
-                conversation_memory_service=(
-                    self.conversation_memory_service
-                ),
+                task_pattern_service=self.task_pattern_service,
 
-                context_resolver_service=(
-                    self.context_resolver_service
-                ),
-
-                task_pattern_service=(
-                    self.task_pattern_service
-                )
+                get_active_user_id=_get_uid,
 
             )
 
         )
-
 
         # =====================================
         # OBSERVER AGENT
@@ -384,14 +300,11 @@ class AIVAKernel:
 
                 state_manager=self.state,
 
-                memory_service=(
-                    self.memory_service
-                )
+                memory_engine=self.memory_engine,
 
             )
 
         )
-
 
         # =====================================
         # BROWSER AGENT
@@ -401,22 +314,17 @@ class AIVAKernel:
 
             BrowserAgent(
 
-                browser_service=(
-                    self.browser_service
-                ),
+                browser_service=self.browser_service,
 
                 event_bus=self.event_bus,
 
                 state_manager=self.state,
 
-                memory_service=(
-                    self.memory_service
-                )
+                memory_engine=self.memory_engine,
 
             )
 
         )
-
 
         # =====================================
         # MEMORY AGENT
@@ -430,14 +338,13 @@ class AIVAKernel:
 
                 state_manager=self.state,
 
-                memory_service=(
-                    self.memory_service
-                )
+                memory_engine=self.memory_engine,
+
+                get_active_user_id=_get_uid,
 
             )
 
         )
-
 
         # =====================================
         # RESEARCH AGENT
@@ -451,22 +358,19 @@ class AIVAKernel:
 
                 state_manager=self.state,
 
-                memory_service=(
-                    self.memory_service
-                ),
+                memory_engine=self.memory_engine,
 
-                knowledge_service=(
-                    self.knowledge_service
-                ),
+                tavily_service=self.tavily_service,
 
-                conversation_memory_service=(
-                    self.conversation_memory_service
-                )
+                mistral_service=self.mistral_service,
+
+                context_resolver_service=self.context_resolver_service,
+
+                get_active_user_id=_get_uid,
 
             )
 
         )
-
 
         # =====================================
         # INTERACTION LAYER
@@ -478,33 +382,15 @@ class AIVAKernel:
 
                 event_bus=self.event_bus,
 
-                intent_router_service=(
-                    self.intent_router_service
-                ),
+                intent_router_service=self.intent_router_service,
 
-                conversation_service=(
-                    self.conversation_service
-                ),
+                conversation_service=self.conversation_service,
 
-                conversation_memory_service=(
-                    self.conversation_memory_service
-                ),
+                memory_engine=self.memory_engine,
 
-                context_resolver_service=(
-                    self.context_resolver_service
-                ),
+                context_resolver_service=self.context_resolver_service,
 
-                user_memory_service=(
-                    self.user_memory_service
-                ),
-
-                memory_extraction_service=(
-                    self.memory_extraction_service
-                ),
-
-                passive_memory_service=(
-                    self.passive_memory_service
-                )
+                get_active_user_id=_get_uid,
 
             )
 
@@ -526,10 +412,6 @@ class AIVAKernel:
     def set_active_user(self, user_id: Optional[str]):
         """Binds the active user context across memory and task services."""
         self.active_user_id = user_id
-        if hasattr(self, "user_memory_service") and self.user_memory_service:
-            self.user_memory_service.active_user_id = user_id
-        if hasattr(self, "conversation_memory_service") and self.conversation_memory_service:
-            self.conversation_memory_service.active_user_id = user_id
         if hasattr(self, "task_pattern_service") and self.task_pattern_service:
             self.task_pattern_service.active_user_id = user_id
 
@@ -550,17 +432,12 @@ class AIVAKernel:
         # =====================================
         services = {
             "browser": self.browser_service,
-            "memory": self.memory_service,
+            "memory": self.memory_engine,
             "session": self.session_service,
             "workflow": self.workflow_engine,
             "dispatcher": self.action_dispatcher,
-            "knowledge": self.knowledge_service,
-            "recall": self.recall_service,
             "reasoning": self.reasoning_service,
-            "conversation_memory": self.conversation_memory_service,
-            "user_memory": self.user_memory_service,
             "task_pattern": self.task_pattern_service,
-            "memory_extraction": self.memory_extraction_service,
             "intent_classifier": self.intent_classifier_service,
             "context_resolver": self.context_resolver_service,
             "intent_router": self.intent_router_service,
@@ -579,9 +456,10 @@ class AIVAKernel:
         from services.voice_service import VoiceService
         self.voice_service = VoiceService()
 
-        # Bind OutcomeReporter: give it voice + memory so it can speak results
+        # Bind OutcomeReporter: give it voice + memory engine so it can speak results
         self.outcome_reporter.voice_service = self.voice_service
-        self.outcome_reporter.conversation_memory_service = self.conversation_memory_service
+        self.outcome_reporter.memory_engine = self.memory_engine
+        self.outcome_reporter.get_active_user_id = lambda: getattr(self, "active_user_id", None)
         self.outcome_reporter.wake_word_service = self.wake_word_service
         self.workflow_engine.outcome_reporter = self.outcome_reporter
 
@@ -954,13 +832,107 @@ class AIVAKernel:
             # Speak result back to user
             if self.voice_service and summary:
                 await self.voice_service.speak(summary)
-            # Also log it to conversation memory so AIVA remembers it
-            if hasattr(self, "conversation_memory_service") and self.conversation_memory_service:
+            # Also log concise summary + ref_id to MemoryEngine (never dump raw tool report into working row)
+            uid = _get_active_uid(action)
+            if self.memory_engine and uid:
                 goal = action.get("parameters", {}).get("instruction") or action.get("goal", "web task")
-                self.conversation_memory_service.add_turn(goal, summary)
+                self.memory_engine.observe(
+                    uid,
+                    {
+                        "user": goal,
+                        "assistant": summary,
+                        "channel": action.get("channel") or "hud",
+                        "ref_id": result.get("ref_id") or "web_auto",
+                        "is_tool_output": True,
+                    },
+                )
             return result
 
         self.capabilities.register("web_automation", web_automation_action)
+
+        # ─── Memory Tools (recall & create_reminder) ────────────────────────
+        async def recall_action(action):
+            params = action.get("parameters", {})
+            query = params.get("query") or action.get("query") or ""
+            uid = _get_active_uid(action)
+            if not uid:
+                return {"status": "error", "error": "unauthenticated"}
+            return self.memory_engine.recall(uid, query)
+
+        async def create_reminder_action(action):
+            params = action.get("parameters", {})
+            text = params.get("text") or action.get("text") or ""
+            due_at = params.get("due_at") or action.get("due_at")
+            recurrence = params.get("recurrence")
+            uid = _get_active_uid(action)
+            if not uid:
+                return {"status": "error", "error": "unauthenticated"}
+            return self.memory_engine.create_reminder(uid, text, due_at, recurrence=recurrence)
+
+        self.capabilities.register("recall", recall_action)
+        self.capabilities.register("create_reminder", create_reminder_action)
+
+        # ─── WhatsApp Channel ──────────────────────────────────────────────
+        from services.whatsapp_service import WhatsAppService
+        self.whatsapp_service = WhatsAppService(self.db, kernel=self)
+
+        def _deliver_whatsapp_reminder(uid: str, text: str):
+            links = self.db.get_whatsapp_links_for_user(uid)
+            verified = [l for l in links if l.get("status") == "verified"]
+            if not verified:
+                return False
+            phone = verified[0]["phone_e164"]
+            return self.whatsapp_service.send_whatsapp_message(phone, text, user_id=uid)
+
+        async def _deliver_voice_reminder(_uid: str, text: str):
+            if self.voice_service:
+                await self.voice_service.speak(text)
+
+        self.memory_engine.scheduler.whatsapp_deliver = _deliver_whatsapp_reminder
+        self.memory_engine.scheduler.voice_deliver = _deliver_voice_reminder
+        if getattr(self, "outcome_reporter", None):
+            self.outcome_reporter.whatsapp_deliver = _deliver_whatsapp_reminder
+        try:
+            self.memory_engine.scheduler.start(asyncio.get_running_loop())
+        except RuntimeError:
+            pass
+
+        async def whatsapp_send_action(action):
+            params = action.get("parameters", {})
+            contact = params.get("contact") or action.get("contact", "")
+            message = params.get("message") or action.get("message", "")
+            uid = _get_active_uid(action)
+            if not uid:
+                return {"status": "error", "error": "unauthenticated", "message": "User not authenticated"}
+            if not contact or not message:
+                return {"status": "error", "error": "missing_params", "message": "Contact and message are required"}
+
+            resolution = self.whatsapp_service.resolve_contact(uid, contact)
+            if resolution["status"] != "found":
+                return resolution
+
+            c = resolution["contact"]
+            res = await self.whatsapp_service.send_whatsapp_message(c["phone_e164"], message, user_id=uid)
+            if res.get("status") == "success":
+                msg = f"Sent WhatsApp message to {c['display_name']}: {message}"
+                if self.voice_service:
+                    await self.voice_service.speak(f"Sent message to {c['display_name']}")
+                return {"status": "success", "message": msg, "contact": c["display_name"]}
+            else:
+                err_msg = f"Failed to send WhatsApp message to {c['display_name']}: {res.get('error')}"
+                return {"status": "error", "error": res.get("error"), "message": err_msg}
+
+        self.capabilities.register("whatsapp_send", whatsapp_send_action)
+
+        async def whatsapp_lookup_contact_action(action):
+            params = action.get("parameters", {})
+            name = params.get("name") or params.get("contact") or action.get("name", "")
+            uid = _get_active_uid(action)
+            if not uid:
+                return {"status": "error", "error": "unauthenticated"}
+            return self.whatsapp_service.resolve_contact(uid, name)
+
+        self.capabilities.register("whatsapp_lookup_contact", whatsapp_lookup_contact_action)
 
         self.input_handler.voice_service = self.voice_service
 
@@ -1021,6 +993,7 @@ class AIVAKernel:
             self.workflow_observer.start()
         )
 
+        self.task_queue.has_consumer = True
         asyncio.create_task(
             self.process_tasks()
         )
@@ -1105,18 +1078,18 @@ class AIVAKernel:
             )
 
 
-            self.memory_service.remember(
+            if self.active_user_id and self.memory_engine:
+                self.memory_engine.record_system_event(
+                    self.active_user_id,
+                    f"task:{task.get('action') or str(task)[:120]}",
+                    importance=0.35,
+                )
 
-                "last_task",
 
-                task
-
-            )
-
-
+            done_future = task.pop("_done_future", None)
             try:
 
-                await (
+                dispatch_result = await (
 
                     self.action_dispatcher
                     .dispatch(
@@ -1124,12 +1097,16 @@ class AIVAKernel:
                     )
 
                 )
+                if done_future is not None and not done_future.done():
+                    done_future.set_result(dispatch_result)
 
                 print(
                     "\n[AIVA] Task completed successfully.\n"
                 )
 
             except Exception as error:
+                if done_future is not None and not done_future.done():
+                    done_future.set_result({"status": "error", "error": str(error), "message": str(error)})
 
                 print(
 
@@ -1190,13 +1167,12 @@ class AIVAKernel:
             return
 
 
-        self.memory_service.remember(
-
-            "last_url",
-
-            url
-
-        )
+        if self.active_user_id and self.memory_engine:
+            self.memory_engine.record_system_event(
+                self.active_user_id,
+                f"Visited URL: {url}",
+                importance=0.3,
+            )
 
 
         if "youtube.com" in url:
@@ -1274,6 +1250,9 @@ class AIVAKernel:
 
 
         self.running = False
+
+        if hasattr(self, "memory_engine") and self.memory_engine:
+            self.memory_engine.shutdown()
 
 
         await (

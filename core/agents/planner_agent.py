@@ -9,11 +9,10 @@ class PlannerAgent(BaseAgent):
     def __init__(
         self,
         mistral_service=None,
-        recall_service=None,
         reasoning_service=None,
-        conversation_memory_service=None,
         context_resolver_service=None,
         task_pattern_service=None,
+        get_active_user_id=None,
         **kwargs
     ):
 
@@ -26,16 +25,8 @@ class PlannerAgent(BaseAgent):
             mistral_service
         )
 
-        self.recall_service = (
-            recall_service
-        )
-
         self.reasoning_service = (
             reasoning_service
-        )
-
-        self.conversation_memory_service = (
-            conversation_memory_service
         )
 
         self.context_resolver_service = (
@@ -45,6 +36,8 @@ class PlannerAgent(BaseAgent):
         self.task_pattern_service = (
             task_pattern_service
         )
+
+        self.get_active_user_id = get_active_user_id
 
         self.capabilities = [
             "planning",
@@ -92,11 +85,15 @@ class PlannerAgent(BaseAgent):
             goal = data.get(
                 "goal"
             )
+            uid = data.get("user_id")
+            channel = data.get("channel") or "hud"
 
             if goal:
 
                 await self.plan_goal(
-                    goal
+                    goal,
+                    user_id=uid,
+                    channel=channel,
                 )
 
         # =====================================
@@ -132,13 +129,16 @@ class PlannerAgent(BaseAgent):
 
     async def plan_goal(
         self,
-        goal
+        goal,
+        user_id=None,
+        channel: str = "hud",
     ):
 
         print(
             f"[PlannerAgent] Planning goal: {goal}"
         )
 
+        uid = user_id or (self.get_active_user_id() if self.get_active_user_id else None)
         original_goal = goal
 
         # =====================================
@@ -153,7 +153,8 @@ class PlannerAgent(BaseAgent):
 
                 self.context_resolver_service
                 .resolve(
-                    goal
+                    goal,
+                    user_id=uid,
                 )
 
             )
@@ -178,38 +179,24 @@ class PlannerAgent(BaseAgent):
         # =====================================
         # LONG-TERM MEMORY RECALL (For Questions)
         # =====================================
-        if not is_action_goal and self.recall_service:
-            memory = self.recall_service.recall(resolved_goal)
-
-            if memory:
-                print("[PlannerAgent] Knowledge question memory hit")
-
-                # =================================
-                # MEMORY REASONING
-                # =================================
+        if not is_action_goal and self.memory_engine and uid:
+            recalled = self.memory_engine.recall(uid, resolved_goal, top_k=4)
+            memories = recalled.get("memories") or []
+            if memories:
+                print("[PlannerAgent] Memory recall hit")
                 if self.reasoning_service:
                     answer = await self.reasoning_service.answer_from_memory(
                         original_goal,
-                        memory["memory"]
+                        recalled.get("summary", ""),
                     )
-
                     print("\n==============================")
                     print("[AIVA MEMORY ANSWER]")
                     print(answer)
                     print("==============================\n")
-
-                    # =============================
-                    # UPDATE CONVERSATION MEMORY
-                    # =============================
-                    if self.conversation_memory_service:
-                        entity = memory.get("entity")
-                        if entity:
-                            self.conversation_memory_service.set_current_topic(entity)
-                        self.conversation_memory_service.add_turn(
-                            original_goal,
-                            answer
-                        )
-
+                    self.memory_engine.observe(
+                        uid,
+                        {"user": original_goal, "assistant": answer, "channel": "hud"},
+                    )
                     return
 
         # =====================================
@@ -223,7 +210,9 @@ class PlannerAgent(BaseAgent):
 
                 workflow = WorkflowGraph(
                     workflow_id=f"workflow_{resolved_goal}",
-                    goal=resolved_goal
+                    goal=resolved_goal,
+                    user_id=uid,
+                    channel=channel,
                 )
 
                 for item in pattern_match["workflow"]:
@@ -244,6 +233,8 @@ class PlannerAgent(BaseAgent):
                     {
                         "goal": resolved_goal,
                         "original_goal": original_goal,
+                        "user_id": uid,
+                        "channel": channel,
                         "workflow": workflow,
                         "raw_workflow_data": pattern_match,
                         "source": "learned_pattern"
@@ -283,7 +274,9 @@ class PlannerAgent(BaseAgent):
                 workflow_id=(
                     f"workflow_{resolved_goal}"
                 ),
-                goal=resolved_goal
+                goal=resolved_goal,
+                user_id=uid,
+                channel=channel,
             )
 
             # =====================================
@@ -343,6 +336,8 @@ class PlannerAgent(BaseAgent):
                     resolved_goal,
                     "original_goal":
                     original_goal,
+                    "user_id": uid,
+                    "channel": channel,
                     "workflow":
                     workflow,
                     "raw_workflow_data":

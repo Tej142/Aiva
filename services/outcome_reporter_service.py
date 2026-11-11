@@ -13,6 +13,9 @@ communicated naturally, just like a human assistant would.
 """
 
 import asyncio
+import inspect
+import time
+from typing import Optional
 from core.shared.config_loader import load_secrets
 from core.shared.logger import get_logger
 
@@ -39,7 +42,7 @@ Rules:
 class OutcomeReporterService:
     """
     Generates spoken natural-language task completion feedback.
-    Bound to VoiceService and ConversationMemoryService after kernel starts.
+    Bound to VoiceService and MemoryEngine after kernel starts.
     """
 
     def __init__(self):
@@ -50,28 +53,30 @@ class OutcomeReporterService:
         self.gemini_api_key = secrets.get("gemini_api_key", "")
         self.current_key_idx = 0
         self.voice_service = None                   # set by kernel after init
-        self.conversation_memory_service = None     # set by kernel after init
+        self.memory_engine = None                   # set by kernel after init
         self.wake_word_service = None               # set by kernel after init
+        self.get_active_user_id = None              # set by kernel after init
+        self.hud_deliver = None                     # set by server: (user_id, payload) -> bool
+        self.whatsapp_deliver = None                # set by kernel: (user_id, text) -> Any
         logger.info("OutcomeReporterService initialized")
 
     # ------------------------------------------------------------------
-    # MAIN ENTRY POINT â€” called by kernel after workflow execution
+    # MAIN ENTRY POINT - called by kernel/workflow_engine after execution
     # ------------------------------------------------------------------
 
     async def report(
         self,
         goal: str,
-        node_results: list,          # [{"node_id", "action", "status", "error"?}, ...]
-        user_language_hint: str = "english"
+        node_results: list,          # [{"node_id", "action", "status", "error"?, "output"?, "sources"?}, ...]
+        user_language_hint: str = "english",
+        user_id: Optional[str] = None,
+        channel: str = "hud",
+        workflow_id: Optional[str] = None,
     ):
         """
-        Generate and speak a natural outcome summary.
-
-        Args:
-            goal:               The original user goal string.
-            node_results:       List of per-node outcome dicts from WorkflowEngine.
-            user_language_hint: "english" or "tanglish" â€” mirrors user's style.
+        Generate, push to HUD + originating channel, and optionally speak a workflow outcome.
         """
+        t0 = time.perf_counter()
         if not node_results:
             return
 
@@ -79,20 +84,87 @@ class OutcomeReporterService:
         if not outcome_text:
             return
 
-        logger.info(f"[OutcomeReporter] Speaking outcome: {outcome_text[:80]}...")
-        print(f"\nAIVA: {outcome_text}\n")
+        uid = user_id or (self.get_active_user_id() if self.get_active_user_id else None)
+        collected_sources = []
+        outputs = []
+        for r in node_results:
+            if r.get("sources"):
+                collected_sources.extend(r["sources"])
+            if r.get("output"):
+                outputs.append(str(r["output"]))
 
-        # Update conversation memory so AIVA remembers what happened
-        if self.conversation_memory_service:
-            self.conversation_memory_service.add_turn(goal, outcome_text)
+        full_hud_text = outcome_text
+        if outputs and len(outputs[-1]) > 80 and outputs[-1] not in outcome_text:
+            full_hud_text = f"{outcome_text}\n\n{outputs[-1]}"
 
-        # Speak outcome aloud
-        if self.voice_service:
+        all_success = all(r.get("status") == "completed" for r in node_results)
+
+        # Update MemoryEngine with concise summary + ref_id (never dump full report into working row)
+        if self.memory_engine and uid:
+            self.memory_engine.observe(
+                uid,
+                {
+                    "user": goal,
+                    "assistant": outcome_text,
+                    "channel": channel or "hud",
+                    "ref_id": workflow_id or f"wf_{int(time.time())}",
+                    "is_tool_output": True,
+                },
+                channel=channel or "hud",
+            )
+
+        # 1. Push background completion to HUD over WebSocket so it is never silently dropped
+        hud_pushed = False
+        if self.hud_deliver and uid:
+            try:
+                res = self.hud_deliver(
+                    uid,
+                    {
+                        "type": "workflow_result",
+                        "text": full_hud_text,
+                        "speech_text": outcome_text,
+                        "goal": goal,
+                        "channel": channel or "hud",
+                        "all_success": all_success,
+                        "sources": collected_sources[:5],
+                        "speak": (channel or "hud") in ("hud", "voice"),
+                    },
+                )
+                if inspect.isawaitable(res):
+                    res = await res
+                hud_pushed = bool(res)
+            except Exception as err:
+                logger.warning(f"[Agent] stage=workflow_report_hud duration_ms=0 status=error error={type(err).__name__}")
+
+        # 2. Push back to originating non-HUD channel (e.g. WhatsApp)
+        wa_pushed = False
+        if channel == "whatsapp" and self.whatsapp_deliver and uid:
+            try:
+                from core.agent.shaper import format_for_whatsapp
+                wa_text = format_for_whatsapp(full_hud_text)
+            except Exception:
+                wa_text = full_hud_text
+            try:
+                wres = self.whatsapp_deliver(uid, wa_text)
+                if inspect.isawaitable(wres):
+                    wres = await wres
+                wa_pushed = bool(wres)
+            except Exception as err:
+                logger.warning(f"[Agent] stage=workflow_report_whatsapp duration_ms=0 status=error error={type(err).__name__}")
+
+        # 3. Local desktop TTS only if voice service is active (headless VM no-ops cleanly)
+        if self.voice_service and (channel or "hud") in ("hud", "voice"):
             await self.voice_service.speak(outcome_text)
 
         # Trigger follow-up listening window so user can issue next command without saying wake word again
         if self.wake_word_service and getattr(self.wake_word_service, "running", False):
             self.wake_word_service.trigger_followup(timeout=7.0)
+
+        dur_ms = round((time.perf_counter() - t0) * 1000, 1)
+        logger.info(
+            f"[Agent] stage=workflow_report duration_ms={dur_ms} "
+            f"status={'ok' if all_success else 'partial'} hud={int(hud_pushed)} wa={int(wa_pushed)}"
+        )
 
     # ------------------------------------------------------------------
     # LLM OUTCOME GENERATION
@@ -114,11 +186,14 @@ class OutcomeReporterService:
             action = r.get("action", "")
             status = r.get("status", "unknown")
             error  = r.get("error", "")
+            out    = r.get("output", "")
             if status != "completed":
                 all_success = False
             line = f"- {nid} ({action}): {status}"
             if error:
-                line += f" â€” reason: {error}"
+                line += f" -- reason: {error}"
+            elif out:
+                line += f" -- output: {str(out)[:220]}"
             result_lines.append(line)
 
         result_block = "\n".join(result_lines)

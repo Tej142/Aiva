@@ -214,6 +214,35 @@ class MemoryExtractor:
     # WORKING BUFFER & SESSION CAPTURE
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compact_working_output(
+        role: str,
+        raw_text: str,
+        ref_id: Optional[str] = None,
+        is_tool_output: bool = False,
+        max_chars: int = 320,
+    ) -> Tuple[str, str]:
+        """Never persist full research dumps or raw tool outputs into `working` rows; store summary + ref_id."""
+        cleaned = (raw_text or "").strip()
+        looks_like_report = bool(
+            ref_id
+            or is_tool_output
+            or len(cleaned) > max_chars
+            or "##" in cleaned
+            or "Sources:" in cleaned
+        )
+        if role != "user" and looks_like_report:
+            plain = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+            plain = re.sub(r"[#>*`]+", " ", plain)
+            plain = re.sub(r"\s+", " ", plain).strip()
+            snippet = plain[:220].rstrip(" ,;:-")
+            if len(plain) > 220:
+                snippet += "..."
+            rid = (ref_id or new_id()[:12]).strip()
+            persisted = f"{snippet} [ref:{rid}]"
+            return persisted, snippet[:180]
+        return cleaned, cleaned[:180]
+
     def append_turn(
         self,
         user_id: str,
@@ -222,6 +251,8 @@ class MemoryExtractor:
         channel: str = "hud",
         session_id: str = "default",
         enqueue_extraction: bool = True,
+        ref_id: Optional[str] = None,
+        is_tool_output: bool = False,
     ) -> Optional[MemoryItem]:
         """Append a turn to token-capped per-session working buffer and persist non-sensitive working turn."""
         t0 = time.perf_counter()
@@ -238,22 +269,25 @@ class MemoryExtractor:
             return None
 
         now = time.time()
+        compact_body, short_summary = self._compact_working_output(
+            role, content, ref_id=ref_id, is_tool_output=is_tool_output
+        )
         turn = WorkingTurn(
             role=role,
-            content=content.strip(),
+            content=compact_body,
             channel=channel or "hud",
             timestamp=now,
             session_id=session_id or "default",
         )
 
-        # Persist to SQLite working memory so `/api/history` stays intact
+        # Persist compacted summary + ref_id to SQLite working memory so `/api/history` stays intact
         source = MemorySource.SYSTEM.value if role == "assistant" else MemorySource.USER_SAID.value
         w_item = MemoryItem(
             id=new_id(),
             user_id=user_id,
             type=MemoryType.WORKING.value,
             content=f"{role}: {turn.content}",
-            summary=turn.content[:180],
+            summary=short_summary,
             entities=[],
             importance=0.35,
             confidence=0.9,

@@ -55,9 +55,10 @@ def _get_memory_engine() -> MemoryEngine:
 
 
 def _deliver_to_hud(user_id: str, payload: dict) -> bool:
-    """Push proactive reminder / briefing notifications over open HUD WebSockets."""
+    """Push proactive reminder, briefing, or background workflow notifications over open HUD WebSockets."""
     delivered = False
-    msg_json = json.dumps({"type": "memory_notification", **payload})
+    msg_type = (payload or {}).get("type") or "memory_notification"
+    msg_json = json.dumps({**(payload or {}), "type": msg_type})
     with _hud_ws_lock:
         conns = list(_hud_ws_clients.get(user_id, set()))
         dead = []
@@ -1275,6 +1276,8 @@ def start_kernel_background():
     kernel = AIVAKernel(db=db, device_manager=device_manager, device_channel=device_channel)
     kernel.device_channel = device_channel
     kernel.memory_engine.scheduler.hud_deliver = _deliver_to_hud
+    if getattr(kernel, "outcome_reporter", None):
+        kernel.outcome_reporter.hud_deliver = _deliver_to_hud
     device_channel.set_event_loop(kernel_loop)
 
     # Attach primary user if available
