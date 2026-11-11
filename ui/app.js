@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMemoryControls();
     checkAuthStatus();
     pollSystemStatus();
+    setInterval(pollSystemStatus, 15000);
 });
 
 // ---------------------------------------------------------------------
@@ -621,28 +622,119 @@ window.triggerQuickCommand = function(cmd) {
     if (promptInput) promptInput.value = '';
 };
 
+let _activeChatAbort = null;
+
+function abortActiveChatStream() {
+    if (_activeChatAbort) {
+        try { _activeChatAbort.abort(); } catch {}
+        _activeChatAbort = null;
+    }
+}
+
+function formatStreamStageLabel(stage) {
+    const clean = String(stage || 'thinking').trim();
+    if (!clean) return 'Thinking...';
+    return clean.charAt(0).toUpperCase() + clean.slice(1) + (clean.endsWith('...') ? '' : '...');
+}
+
+function renderSourcesDrawer(sources) {
+    if (!Array.isArray(sources) || sources.length === 0) return '';
+    const items = sources.map(src => {
+        const title = escapeHtml(src.title || src.url || 'Source');
+        const rawUrl = String(src.url || '').trim();
+        const safeUrl = /^https?:\/\//i.test(rawUrl) ? escapeHtml(rawUrl) : '';
+        const retrieved = escapeHtml(src.retrieved_at || '');
+        const linkHtml = safeUrl
+            ? `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="chat-link">${title}</a>`
+            : `<span>${title}</span>`;
+        const dateHtml = retrieved ? `<span class="chat-source-date">${retrieved}</span>` : '';
+        return `<li>${linkHtml}${dateHtml}</li>`;
+    }).join('');
+    return `<details class="chat-sources"><summary>Sources (${sources.length})</summary><ol class="chat-sources-list">${items}</ol></details>`;
+}
+
+async function fetchChatFallback(query, msgDiv, textEl) {
+    let response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ message: query, include_audio: !isVoiceMuted })
+    });
+    if (response.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+            response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ message: query, include_audio: !isVoiceMuted })
+            });
+        }
+    }
+    if (response.status === 401) {
+        msgDiv.remove();
+        appendChatMessage('aiva', '🔒 Authentication required. Please log in to command AIVA.');
+        setNeuralCoreState('idle');
+        showWebAuthModal();
+        return;
+    }
+    const data = await response.json();
+    if (data.status === 'success' || data.response) {
+        const reply = data.response || 'Command executed successfully.';
+        const sources = Array.isArray(data.sources) ? data.sources : [];
+        textEl.innerHTML = renderMarkdown(reply);
+        if (sources.length) {
+            const bodyEl = msgDiv.querySelector('.msg-body');
+            if (bodyEl) bodyEl.insertAdjacentHTML('beforeend', renderSourcesDrawer(sources));
+        }
+        setNeuralCoreState('speaking');
+        if (data.route || data.tag) updateWorkflowVisualizer(query, data.tag || data.route, reply);
+        if (data.screenshot_base64) updateVisionSnapshot(data.screenshot_base64);
+        playVoiceOutput(reply, data.audio_base64);
+    } else {
+        textEl.innerHTML = renderMarkdown(`⚠️ Error: ${data.error || 'Failed to execute command.'}`);
+        setNeuralCoreState('idle');
+    }
+}
+
 async function sendUserMessage(query) {
+    abortActiveChatStream();
     appendChatMessage('user', query);
     setNeuralCoreState('thinking');
 
-    const tempMsgId = 'temp-' + Date.now();
-    appendChatMessage('aiva', '<div class="typing-dots"><span></span><span></span><span></span></div>', tempMsgId);
+    const tempMsgId = 'stream-' + Date.now();
+    const msgDiv = appendChatMessage(
+        'aiva',
+        '<div class="stream-status-row"><span class="stream-status-pill">Thinking...</span></div><div class="typing-dots"><span></span><span></span><span></span></div>',
+        tempMsgId
+    );
+    const textEl = msgDiv ? msgDiv.querySelector('.msg-text') : null;
+    const senderEl = msgDiv ? msgDiv.querySelector('.msg-sender') : null;
+    const bodyEl = msgDiv ? msgDiv.querySelector('.msg-body') : null;
+    const container = document.getElementById('chat-messages');
+
+    const controller = new AbortController();
+    _activeChatAbort = controller;
+    let streamedText = '';
+    let currentStage = 'Thinking...';
+    let finalReceived = false;
+    let audioStreamStarted = false;
+    let earconPlayedForWork = false;
+    let sseAudioChunks = 0;
+
+    const sessionMgr = window.AivaVoice && window.AivaVoice.sessionManager;
 
     try {
-        let response = await fetch('/api/chat', {
+        const reqInit = () => ({
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ message: query })
+            body: JSON.stringify({ message: query, include_audio: !isVoiceMuted }),
+            signal: controller.signal
         });
 
+        let response = await fetch('/api/chat/stream', reqInit());
         if (response.status === 401) {
             const refreshed = await refreshAccessToken();
             if (refreshed) {
-                response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: authHeaders(),
-                    body: JSON.stringify({ message: query })
-                });
+                response = await fetch('/api/chat/stream', reqInit());
             }
         }
 
@@ -654,131 +746,223 @@ async function sendUserMessage(query) {
             return;
         }
 
-        const data = await response.json();
-        removeTempMessage(tempMsgId);
-
-        if (data.status === 'success' || data.response) {
-            const reply = data.response || "Command executed successfully.";
-            appendChatMessage('aiva', reply, null, data.route);
-            setNeuralCoreState('speaking');
-
-            if (data.route) {
-                updateWorkflowVisualizer(query, data.route, reply);
+        const ctype = (response.headers.get('content-type') || '').toLowerCase();
+        if (!response.ok || !ctype.includes('text/event-stream') || !response.body) {
+            if (msgDiv && textEl) {
+                await fetchChatFallback(query, msgDiv, textEl);
             }
+            return;
+        }
 
-            if (data.screenshot_base64) {
-                updateVisionSnapshot(data.screenshot_base64);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let sseBuffer = '';
+
+        const renderProgress = () => {
+            if (!textEl) return;
+            const statusHtml = currentStage
+                ? `<div class="stream-status-row"><span class="stream-status-pill">${escapeHtml(currentStage)}</span></div>`
+                : '';
+            const bodyHtml = streamedText
+                ? renderMarkdown(streamedText)
+                : '<div class="typing-dots"><span></span><span></span><span></span></div>';
+            textEl.innerHTML = statusHtml + bodyHtml;
+            if (container) container.scrollTop = container.scrollHeight;
+        };
+
+        const handleSseFrame = (rawFrame) => {
+            if (!rawFrame.trim()) return;
+            let evType = 'message';
+            const dataLines = [];
+            for (const line of rawFrame.split(/\r?\n/)) {
+                if (line.startsWith('event:')) {
+                    evType = line.slice(6).trim();
+                } else if (line.startsWith('data:')) {
+                    dataLines.push(line.slice(5).trim());
+                }
             }
+            if (!dataLines.length) return;
+            let payload = {};
+            try { payload = JSON.parse(dataLines.join('\n')); } catch { return; }
 
-            // Play neural TTS audio output
-            playVoiceOutput(reply, data.audio_base64);
-        } else {
-            appendChatMessage('aiva', `⚠️ Error: ${data.error || 'Failed to execute command.'}`);
-            setNeuralCoreState('idle');
+            if (evType === 'status') {
+                const rawStage = String(payload.status || payload.stage || 'working');
+                currentStage = formatStreamStageLabel(rawStage);
+                if (!earconPlayedForWork && /search|read|run|execut|deeply/.test(rawStage.toLowerCase())) {
+                    earconPlayedForWork = true;
+                    window.AivaVoice?.playEarcon?.('action');
+                }
+                renderProgress();
+            } else if (evType === 'delta') {
+                const tok = String(payload.delta || '');
+                if (tok) {
+                    streamedText += tok;
+                    renderProgress();
+                }
+            } else if (evType === 'audio_chunk') {
+                if (!isVoiceMuted && payload.audio_base64 && sessionMgr && sessionMgr.enqueueAudioChunk) {
+                    if (!audioStreamStarted) {
+                        audioStreamStarted = true;
+                        sessionMgr.beginAudioStream(() => setNeuralCoreState('idle'));
+                    }
+                    sseAudioChunks += 1;
+                    sessionMgr.enqueueAudioChunk(payload.audio_base64);
+                }
+            } else if (evType === 'final') {
+                finalReceived = true;
+                const reply = payload.response || streamedText || 'Command executed successfully.';
+                const sources = Array.isArray(payload.sources) ? payload.sources : [];
+                const tag = payload.tag || payload.route || null;
+
+                if (senderEl) {
+                    const tagHtml = tag ? `<span class="tag-pill">${escapeHtml(tag)}</span>` : '';
+                    senderEl.innerHTML = `AIVA ${tagHtml}`;
+                }
+                if (textEl) {
+                    textEl.innerHTML = renderMarkdown(reply);
+                }
+                if (bodyEl && sources.length) {
+                    const existingDrawer = bodyEl.querySelector('.chat-sources');
+                    if (existingDrawer) existingDrawer.remove();
+                    bodyEl.insertAdjacentHTML('beforeend', renderSourcesDrawer(sources));
+                }
+                if (tag) updateWorkflowVisualizer(query, tag, reply);
+                if (payload.screenshot_base64) updateVisionSnapshot(payload.screenshot_base64);
+
+                if (audioStreamStarted && sessionMgr && sessionMgr.finishAudioStream) {
+                    sessionMgr.finishAudioStream();
+                } else if (!isVoiceMuted && sseAudioChunks === 0) {
+                    setNeuralCoreState('idle');
+                }
+                if (container) container.scrollTop = container.scrollHeight;
+                setTimeout(pollSystemStatus, 150);
+            } else if (evType === 'error') {
+                finalReceived = true;
+                if (textEl) {
+                    textEl.innerHTML = renderMarkdown(`⚠️ Error: ${payload.error || 'Failed to execute command.'}`);
+                }
+                setNeuralCoreState('idle');
+            }
+        };
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const parts = sseBuffer.split(/\r?\n\r?\n/);
+            sseBuffer = parts.pop() || '';
+            for (const part of parts) {
+                handleSseFrame(part);
+            }
+        }
+        if (sseBuffer.trim()) {
+            handleSseFrame(sseBuffer);
+        }
+
+        if (!finalReceived && textEl && streamedText) {
+            textEl.innerHTML = renderMarkdown(streamedText);
+            if (audioStreamStarted && sessionMgr && sessionMgr.finishAudioStream) {
+                sessionMgr.finishAudioStream();
+            } else {
+                setNeuralCoreState('idle');
+            }
         }
     } catch (err) {
-        console.error('Chat error:', err);
-        removeTempMessage(tempMsgId);
-        appendChatMessage('aiva', `⚠️ Network error: Could not reach AIVA server.`);
+        if (err && err.name === 'AbortError') {
+            if (textEl) {
+                textEl.innerHTML = streamedText
+                    ? renderMarkdown(streamedText)
+                    : renderMarkdown('Stopped.');
+            }
+            if (audioStreamStarted && sessionMgr) {
+                sessionMgr.stopPlayback();
+            }
+            setNeuralCoreState('idle');
+            return;
+        }
+        console.error('Chat stream error:', err);
+        if (textEl) {
+            textEl.innerHTML = renderMarkdown('⚠️ Network error: Could not reach AIVA server.');
+        } else {
+            removeTempMessage(tempMsgId);
+            appendChatMessage('aiva', '⚠️ Network error: Could not reach AIVA server.');
+        }
         setNeuralCoreState('idle');
+    } finally {
+        if (_activeChatAbort === controller) {
+            _activeChatAbort = null;
+        }
     }
 }
 
 function renderMarkdown(text) {
     if (!text) return '';
     if (typeof text !== 'string') text = String(text);
-    if (text.startsWith('<div class="typing-dots"')) return text;
-
-    const isError = text.trim().startsWith('⚠️') || text.trim().startsWith('Error:');
-
-    let cleanText = text
-        .replace(/\s*---\s*/g, '\n\n---\n\n')
-        .replace(/\s*(#{1,6}\s+)/g, '\n\n$1')
-        .replace(/([.!?]\s+)(\d+\.\s+)/g, '$1\n$2')
-        .replace(/(\]\([^\)]+\)\s*)(\d+\.\s+)/g, '$1\n$2');
-
-    let escaped = cleanText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-    if (isError) {
-        return `<div class="chat-error-msg"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>${escaped.replace(/^⚠️\s*/, '')}</span></div>`;
+    if (text.startsWith('<div class="typing-dots"') || text.startsWith('<div class="stream-status-row"')) {
+        return text;
     }
 
-    // Fenced code blocks
-    escaped = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
-        return `<pre class="chat-code-block"><code>${code.trim()}</code></pre>`;
+    const trimmed = text.trim();
+    if (trimmed.startsWith('⚠️') || trimmed.startsWith('Error:')) {
+        const cleanErr = escapeHtml(trimmed.replace(/^⚠️\s*/, ''));
+        return `<div class="chat-error-msg"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>${cleanErr}</span></div>`;
+    }
+
+    let html = '';
+    if (window.marked && typeof window.marked.parse === 'function') {
+        const parsed = window.marked.parse(text, { gfm: true, breaks: true });
+        if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+            html = window.DOMPurify.sanitize(parsed, { USE_PROFILES: { html: true } });
+        } else {
+            html = parsed;
+        }
+    } else {
+        html = `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+
+    wrapper.querySelectorAll('p').forEach(el => el.classList.add('chat-p'));
+    wrapper.querySelectorAll('h1, h2').forEach(el => el.classList.add('chat-h3'));
+    wrapper.querySelectorAll('h3').forEach(el => el.classList.add('chat-h4'));
+    wrapper.querySelectorAll('h4').forEach(el => el.classList.add('chat-h5'));
+    wrapper.querySelectorAll('h5, h6').forEach(el => el.classList.add('chat-h6'));
+    wrapper.querySelectorAll('ul').forEach(el => el.classList.add('chat-ul'));
+    wrapper.querySelectorAll('ol').forEach(el => el.classList.add('chat-ol'));
+    wrapper.querySelectorAll('li').forEach(el => el.classList.add('chat-list-item'));
+    wrapper.querySelectorAll('blockquote').forEach(el => el.classList.add('chat-blockquote'));
+    wrapper.querySelectorAll('hr').forEach(el => el.classList.add('chat-hr'));
+    wrapper.querySelectorAll('pre').forEach(el => el.classList.add('chat-code-block'));
+    wrapper.querySelectorAll('code').forEach(el => {
+        if (!el.closest('pre')) el.classList.add('chat-inline-code');
+    });
+    wrapper.querySelectorAll('table').forEach(tbl => {
+        tbl.classList.add('chat-table');
+        if (!tbl.parentElement || !tbl.parentElement.classList.contains('chat-table-wrap')) {
+            const wrap = document.createElement('div');
+            wrap.className = 'chat-table-wrap';
+            tbl.parentNode.insertBefore(wrap, tbl);
+            wrap.appendChild(tbl);
+        }
+    });
+    wrapper.querySelectorAll('a').forEach(a => {
+        const href = (a.getAttribute('href') || '').trim();
+        if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
+            a.removeAttribute('href');
+        } else {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        }
+        a.classList.add('chat-link');
     });
 
-    // Inline code
-    escaped = escaped.replace(/`([^`]+)`/g, '<code class="chat-inline-code">$1</code>');
-
-    // Horizontal rules (--- or ***)
-    escaped = escaped.replace(/^(\s*[-*_]{3,}\s*)$/gm, '<hr class="chat-hr">');
-
-    // Headers
-    escaped = escaped.replace(/^#### (.*?)$/gm, '<h6 class="chat-h6">$1</h6>');
-    escaped = escaped.replace(/^### (.*?)$/gm, '<h5 class="chat-h5">$1</h5>');
-    escaped = escaped.replace(/^## (.*?)$/gm, '<h4 class="chat-h4">$1</h4>');
-    escaped = escaped.replace(/^# (.*?)$/gm, '<h3 class="chat-h3">$1</h3>');
-
-    // Bold + Italic
-    escaped = escaped.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
-    // Bold
-    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Italic
-    escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    escaped = escaped.replace(/_([^_]+)_/g, '<em>$1</em>');
-
-    // Markdown Links: [title](url)
-    escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="chat-link">$1 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-left:2px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>');
-
-    // Split paragraphs and format lists
-    const paragraphs = escaped.split(/\n\s*\n/);
-    const formatted = paragraphs.map(p => {
-        p = p.trim();
-        if (!p) return '';
-        if (p.startsWith('<pre') || p.startsWith('<hr') || p.startsWith('<h')) {
-            return p;
-        }
-        const lines = p.split('\n');
-        let inList = false;
-        let listHtml = '';
-        const outLines = [];
-        for (const line of lines) {
-            const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
-            const numMatch = line.match(/^\s*(\d+)\.\s+(.*)$/);
-            if (bulletMatch || numMatch) {
-                const content = bulletMatch ? bulletMatch[1] : numMatch[2];
-                if (!inList) {
-                    inList = true;
-                    listHtml = `<ul class="chat-ul"><li class="chat-list-item">${content}</li>`;
-                } else {
-                    listHtml += `<li class="chat-list-item">${content}</li>`;
-                }
-            } else {
-                if (inList) {
-                    listHtml += '</ul>';
-                    outLines.push(listHtml);
-                    inList = false;
-                }
-                outLines.push(line);
-            }
-        }
-        if (inList) {
-            listHtml += '</ul>';
-            outLines.push(listHtml);
-        }
-        return `<div class="chat-p">${outLines.join('<br>')}</div>`;
-    }).filter(Boolean).join('');
-
-    return formatted || `<div class="chat-p">${escaped}</div>`;
+    return wrapper.innerHTML || `<div class="chat-p">${escapeHtml(text)}</div>`;
 }
 
-function appendChatMessage(sender, text, customId = null, routeTag = null) {
+function appendChatMessage(sender, text, customId = null, routeTag = null, sources = null) {
     const container = document.getElementById('chat-messages');
-    if (!container) return;
+    if (!container) return null;
 
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${sender === 'user' ? 'user-msg' : 'aiva-msg'}`;
@@ -793,12 +977,13 @@ function appendChatMessage(sender, text, customId = null, routeTag = null) {
 
     let tagHtml = '';
     if (routeTag) {
-        tagHtml = `<span class="tag-pill">${routeTag}</span>`;
+        tagHtml = `<span class="tag-pill">${escapeHtml(routeTag)}</span>`;
     }
 
     const formattedContent = sender === 'user'
-        ? `<div class="msg-text">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
+        ? `<div class="msg-text">${escapeHtml(text)}</div>`
         : `<div class="msg-text">${renderMarkdown(text)}</div>`;
+    const sourcesHtml = sender !== 'user' ? renderSourcesDrawer(sources) : '';
 
     msgDiv.innerHTML = `
         <div class="msg-avatar">${avatarText}</div>
@@ -808,11 +993,13 @@ function appendChatMessage(sender, text, customId = null, routeTag = null) {
                 <span class="msg-time">${timeStr}</span>
             </div>
             ${formattedContent}
+            ${sourcesHtml}
         </div>
     `;
 
     container.appendChild(msgDiv);
     container.scrollTop = container.scrollHeight;
+    return msgDiv;
 }
 
 function removeTempMessage(id) {
@@ -871,6 +1058,7 @@ function fallbackBrowserTts(text) {
 }
 
 function stopVoiceOutput() {
+    abortActiveChatStream();
     if (window.AivaVoice && window.AivaVoice.sessionManager) {
         window.AivaVoice.sessionManager.stopPlayback();
     }
@@ -919,6 +1107,11 @@ function initSpeechRecognition() {
             resetInputState();
         }
     });
+
+    // Cancel active SSE stream cleanly on voice barge-in (<250ms)
+    sessionManager.onBargeInAbort = () => {
+        abortActiveChatStream();
+    };
 
     // Handle transcript result
     sessionManager.onTranscriptReady = (text) => {
@@ -1544,7 +1737,7 @@ function connectHudWebSocket() {
                         ? 'briefing'
                         : (payload.type === 'workflow_result' ? 'task' : 'reminder');
                     const sources = Array.isArray(payload.sources) && payload.sources.length ? payload.sources : null;
-                    appendChatMessage('aiva', text, sources, tag);
+                    appendChatMessage('aiva', text, null, tag, sources);
                     if (payload.speak && !isVoiceMuted) {
                         fallbackBrowserTts(speechText);
                     }
@@ -1579,14 +1772,51 @@ function updateVisionSnapshot(base64Data) {
     }
 }
 
+function updateTelemetryCards(telemetry) {
+    if (!telemetry || typeof telemetry !== 'object') return;
+    const total = Number(telemetry.total_requests || 0);
+    const tiers = telemetry.tiers || {};
+    const t0 = Number(tiers.tier_0 || 0);
+    const t1 = Number(tiers.tier_1 || 0);
+    const t2 = Number(tiers.tier_2 || 0);
+    const pct = telemetry.tier_pct || {};
+    const lat = telemetry.latency_ms || {};
+
+    const mixEl = document.getElementById('stat-tier-mix');
+    const pctEl = document.getElementById('stat-tier-pct');
+    const latEl = document.getElementById('stat-latency-p5095');
+    const rateEl = document.getElementById('stat-success-rate');
+    const reqEl = document.getElementById('stat-total-requests');
+
+    if (mixEl) mixEl.textContent = `${t0} / ${t1} / ${t2}`;
+    if (pctEl) pctEl.textContent = total > 0
+        ? `${Math.round(pct.tier_0 || 0)}% / ${Math.round(pct.tier_1 || 0)}% / ${Math.round(pct.tier_2 || 0)}%`
+        : 'T0 / T1 / T2';
+    if (latEl) {
+        latEl.textContent = total > 0
+            ? `${Math.round(lat.p50 || 0)} / ${Math.round(lat.p95 || 0)}`
+            : '—';
+    }
+    if (rateEl) {
+        rateEl.textContent = total > 0 ? `${telemetry.success_rate ?? 100}%` : '—';
+    }
+    if (reqEl) {
+        reqEl.textContent = `${total} turn${total === 1 ? '' : 's'} (24h)`;
+    }
+}
+
 async function pollSystemStatus() {
     try {
-        const resp = await fetch('/api/status');
+        const opts = getAccessToken() ? { headers: authHeaders() } : {};
+        const resp = await fetch('/api/status', opts);
         if (resp.ok) {
             const data = await resp.json();
             const apiLabel = document.getElementById('api-status-label');
             if (apiLabel && data.key_count) {
                 apiLabel.textContent = `Pools: ${data.key_count} Keys Active`;
+            }
+            if (data.telemetry) {
+                updateTelemetryCards(data.telemetry);
             }
         }
     } catch {}

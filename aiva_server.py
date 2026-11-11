@@ -10,13 +10,19 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import base64
 import os
 import json
+import queue
+import time
 from functools import wraps
-from flask import Flask, request, jsonify, send_from_directory, make_response, send_file, redirect
+from flask import Flask, request, jsonify, send_from_directory, make_response, send_file, redirect, Response, stream_with_context
 from flask_cors import CORS
 from flask_sock import Sock
 
+from core.agent import is_agent_core_enabled
+from core.agent.shaper import normalize_sources, pop_complete_sentences, shape_response, split_sentences
+from core.agent.telemetry import TelemetryRecorder, log_agent
 from core.memory import MemoryEngine
 from core.runtime.kernel import AIVAKernel
 from services.database_service import DatabaseService
@@ -52,6 +58,58 @@ def _get_memory_engine() -> MemoryEngine:
         if _fallback_memory_engine is None or _fallback_memory_engine.db is not db:
             _fallback_memory_engine = MemoryEngine(db=db, start_worker=False)
         return _fallback_memory_engine
+
+
+def _get_telemetry_recorder() -> TelemetryRecorder:
+    """Return active kernel's TelemetryRecorder or one bound to current `db`."""
+    if kernel and getattr(kernel, "telemetry", None) and kernel.telemetry.db is db:
+        return kernel.telemetry
+    return TelemetryRecorder(db)
+
+
+def _infer_legacy_tier(route: str) -> int:
+    """Map legacy input_handler route names onto T0/T1/T2 telemetry tiers."""
+    r = str(route or "").lower()
+    if any(k in r for k in ("research", "web", "browser", "goal", "dag")):
+        return 2
+    if r in ("device", "shortcut", "exit", "task", "action", "vision"):
+        return 0
+    return 1
+
+
+async def _synthesize_tts_chunk(text: str):
+    """Synthesize a clean speech chunk into base64 MP3 bytes without blocking stream delivery."""
+    clean_tts = _clean_for_speech(text)
+    if not clean_tts:
+        return None
+    try:
+        vs = getattr(kernel, "voice_service", None) if kernel else None
+        if vs is None:
+            return None
+        if hasattr(vs, "generate_tts_audio"):
+            audio_bytes = await asyncio.wait_for(vs.generate_tts_audio(clean_tts), timeout=6.0)
+        elif hasattr(vs, "_generate_edge_tts_bytes"):
+            from services.voice_service import (
+                _has_telugu_script, VOICE_MOHAN, VOICE_PRABHAT,
+                RATE_PRABHAT, RATE_MOHAN, PITCH_PRABHAT, PITCH_MOHAN,
+            )
+            tel = _has_telugu_script(clean_tts)
+            audio_bytes = await asyncio.wait_for(
+                vs._generate_edge_tts_bytes(
+                    clean_tts,
+                    VOICE_MOHAN if tel else VOICE_PRABHAT,
+                    RATE_MOHAN if tel else RATE_PRABHAT,
+                    PITCH_MOHAN if tel else PITCH_PRABHAT,
+                ),
+                timeout=6.0,
+            )
+        else:
+            return None
+        if audio_bytes:
+            return base64.b64encode(audio_bytes).decode("utf-8")
+    except Exception as err:
+        log_agent("tts_chunk", 0.0, "warn", err=type(err).__name__)
+    return None
 
 
 def _deliver_to_hud(user_id: str, payload: dict) -> bool:
@@ -223,6 +281,57 @@ def download_windows_agent():
 # =====================================================================
 # REST APIS FOR WEB UI HUD & CONTROLS
 # =====================================================================
+def _build_chat_response_payload(
+    msg: str,
+    result: dict,
+    *,
+    sources: list = None,
+    tts_first_audio_ms: float = 0.0,
+) -> dict:
+    """Build normalized non-stream / stream final payload with optional screenshot capture."""
+    reply_text = result.get("response", "Done.")
+    clean_sources = normalize_sources(sources if sources is not None else (result.get("sources") or []))
+    tools = list(result.get("tools") or [])
+    timings = dict(result.get("timings") or {})
+    if tts_first_audio_ms > 0 and "tts_first_audio_ms" not in timings:
+        timings["tts_first_audio_ms"] = round(tts_first_audio_ms, 1)
+
+    payload = {
+        "status": "success",
+        "query": msg,
+        "response": reply_text,
+        "speech_text": result.get("speech_text") or _clean_for_speech(reply_text),
+        "sources": clean_sources,
+        "route": result.get("route", "general"),
+        "tag": result.get("tag") or ("task" if tools else "conversation"),
+        "tier": int(result.get("tier", _infer_legacy_tier(result.get("route", "general")))),
+        "tools": tools,
+        "timings": timings,
+        "should_end_session": bool(result.get("should_end_session", False)),
+    }
+
+    screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage", "last_screenshot.png")
+    if os.path.exists(screenshot_path) and (
+        "screen" in msg.lower() or "shot" in msg.lower() or "screenshot" in tools
+    ):
+        with open(screenshot_path, "rb") as img_file:
+            payload["screenshot_base64"] = base64.b64encode(img_file.read()).decode("utf-8")
+
+    return payload
+
+
+def _maybe_direct_vision(msg: str, user_id: str):
+    """Preserve legacy direct screen inspection shortcut when AIVA_AGENT_CORE is off."""
+    if is_agent_core_enabled():
+        return None
+    if not (any(w in msg.lower() for w in ["screen", "screenshot", "what is on my screen", "inspect screen"]) and kernel and hasattr(kernel, "capabilities")):
+        return None
+    inspect_handler = kernel.capabilities.get("inspect_screen")
+    if not inspect_handler:
+        return None
+    return inspect_handler
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """Processes queries from the Web UI HUD."""
@@ -237,25 +346,25 @@ def api_chat():
     if not auth_user:
         return jsonify({"status": "error", "error": "Authentication required. Please log in."}), 401
 
-    if kernel:
+    if kernel and hasattr(kernel, "set_active_user"):
         kernel.set_active_user(auth_user["id"])
 
-    uid_log = auth_user["id"]
-    print(f"\n[Web UI Chat Query]: {msg} (User: {uid_log})")
+    t0 = time.perf_counter()
+    log_agent("http_chat", 0.0, "start", channel="hud")
     try:
         result = None
-        # Fast direct execution for screen inspection queries
-        if any(w in msg.lower() for w in ["screen", "screenshot", "what is on my screen", "inspect screen"]) and kernel and hasattr(kernel, "capabilities"):
-            inspect_handler = kernel.capabilities.get("inspect_screen")
-            if inspect_handler:
-                try:
-                    v_res = run_async(inspect_handler({"query": msg, "user_id": auth_user["id"]}), timeout=15.0)
-                    if v_res and v_res.get("analysis"):
-                        result = {"response": v_res["analysis"], "route": "vision"}
-                except Exception as v_err:
-                    print(f"[VisionDirect Error]: {v_err}")
+        used_agent_core = bool(
+            kernel and getattr(kernel, "agent_orchestrator", None) and is_agent_core_enabled()
+        )
+        inspect_handler = _maybe_direct_vision(msg, auth_user["id"])
+        if inspect_handler:
+            try:
+                v_res = run_async(inspect_handler({"query": msg, "user_id": auth_user["id"]}), timeout=15.0)
+                if v_res and v_res.get("analysis"):
+                    result = {"response": v_res["analysis"], "route": "vision", "tier": 0, "tag": "action"}
+            except Exception as v_err:
+                log_agent("http_vision", 0.0, "warn", err=type(v_err).__name__)
 
-        # Run through AIVA's intelligent pipeline (Intent Classifier -> Router -> MemoryEngine / DAG / Tool)
         if not result:
             result = run_async(
                 kernel.input_handler.process_query(
@@ -263,54 +372,275 @@ def api_chat():
                     speak=False,
                     user_id=auth_user["id"],
                     channel="hud",
+                    session_id=str(data.get("session_id") or "default"),
                 )
             )
-        
-        reply_text = result.get("response", "Done.")
-        response_data = {
-            "status": "success",
-            "query": msg,
-            "response": reply_text,
-            "route": result.get("route", "general"),
-            "should_end_session": result.get("should_end_session", False)
-        }
+
+        response_data = _build_chat_response_payload(msg, result)
+        reply_text = response_data["response"]
 
         # Synthesize neural voice audio (Edge TTS) for client playback
-        if reply_text and kernel and hasattr(kernel, 'voice_service') and kernel.voice_service:
+        if reply_text and data.get("include_audio", True):
+            t_tts = time.perf_counter()
+            audio_b64 = None
             try:
-                import base64
-                clean_tts = _clean_for_speech(reply_text)
-                if clean_tts:
-                    from services.voice_service import _has_telugu_script, VOICE_MOHAN, VOICE_PRABHAT, RATE_PRABHAT, RATE_MOHAN, PITCH_PRABHAT, PITCH_MOHAN
-                    voice = VOICE_MOHAN if _has_telugu_script(clean_tts) else VOICE_PRABHAT
-                    rate = RATE_MOHAN if _has_telugu_script(clean_tts) else RATE_PRABHAT
-                    pitch = PITCH_MOHAN if _has_telugu_script(clean_tts) else PITCH_PRABHAT
-                    audio_bytes = run_async(kernel.voice_service._generate_edge_tts_bytes(
-                        clean_tts, voice, rate, pitch
-                    ), timeout=6.0)
+                if kernel and getattr(kernel, "voice_service", None) and hasattr(kernel.voice_service, "generate_tts_audio"):
+                    audio_bytes = run_async(kernel.voice_service.generate_tts_audio(_clean_for_speech(reply_text)), timeout=6.0)
                     if audio_bytes:
-                        response_data["audio_base64"] = base64.b64encode(audio_bytes).decode("utf-8")
+                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                elif kernel and getattr(kernel, "voice_service", None):
+                    clean_tts = _clean_for_speech(reply_text)
+                    if clean_tts:
+                        from services.voice_service import _has_telugu_script, VOICE_MOHAN, VOICE_PRABHAT, RATE_PRABHAT, RATE_MOHAN, PITCH_PRABHAT, PITCH_MOHAN
+                        tel = _has_telugu_script(clean_tts)
+                        audio_bytes = run_async(kernel.voice_service._generate_edge_tts_bytes(
+                            clean_tts,
+                            VOICE_MOHAN if tel else VOICE_PRABHAT,
+                            RATE_MOHAN if tel else RATE_PRABHAT,
+                            PITCH_MOHAN if tel else PITCH_PRABHAT,
+                        ), timeout=6.0)
+                        if audio_bytes:
+                            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
             except Exception as tts_err:
-                print(f"[TTS Generate Warning]: {tts_err}")
+                log_agent("http_tts", 0.0, "warn", err=type(tts_err).__name__)
+            if audio_b64:
+                response_data["audio_base64"] = audio_b64
+                response_data["timings"]["tts_first_audio_ms"] = round((time.perf_counter() - t_tts) * 1000, 1)
 
-        # Check if a recent screenshot was taken
-        screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage", "last_screenshot.png")
-        if os.path.exists(screenshot_path) and ("screen" in msg.lower() or "shot" in msg.lower()):
-            import base64
-            with open(screenshot_path, "rb") as img_file:
-                response_data["screenshot_base64"] = base64.b64encode(img_file.read()).decode("utf-8")
+        total_ms = round((time.perf_counter() - t0) * 1000, 1)
+        if not used_agent_core:
+            _get_telemetry_recorder().record(
+                user_id=auth_user["id"],
+                tier=response_data["tier"],
+                channel="hud",
+                tag=response_data["tag"],
+                total_ms=total_ms,
+                tts_first_audio_ms=float(response_data["timings"].get("tts_first_audio_ms", 0.0)),
+                tools=response_data["tools"],
+                success=True,
+            )
 
+        log_agent("http_chat", total_ms, "ok", tier=response_data["tier"], tag=response_data["tag"])
         return jsonify(response_data)
     except Exception as e:
-        print(f"[Web UI Chat Error]: {e}")
+        log_agent("http_chat", round((time.perf_counter() - t0) * 1000, 1), "error", err=type(e).__name__)
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+def api_chat_stream():
+    """Stream Server-Sent Events (status, tool, delta, audio_chunk, final) for the HUD."""
+    data = request.get_json(silent=True) or {}
+    msg = (data.get("message") or data.get("query") or "").strip()
+    if not msg:
+        return jsonify({"status": "error", "error": "Missing message"}), 400
+
+    auth_user = get_authenticated_user()
+    if not auth_user:
+        return jsonify({"status": "error", "error": "Authentication required. Please log in."}), 401
+
+    if kernel and hasattr(kernel, "set_active_user"):
+        kernel.set_active_user(auth_user["id"])
+
+    uid = auth_user["id"]
+    session_id = str(data.get("session_id") or "default")
+    include_audio = bool(data.get("include_audio", True))
+    event_q: queue.Queue = queue.Queue()
+
+    async def _produce_stream():
+        t0 = time.perf_counter()
+        tts_q: asyncio.Queue = asyncio.Queue()
+        spoken_buf = ""
+        deltas_seen = False
+        tts_chunk_idx = 0
+        tts_first_audio_ms = 0.0
+
+        async def _tts_worker():
+            nonlocal tts_chunk_idx, tts_first_audio_ms
+            while True:
+                sentence = await tts_q.get()
+                if sentence is None:
+                    break
+                if not include_audio or len(sentence.strip()) < 2:
+                    continue
+                b64 = await _synthesize_tts_chunk(sentence)
+                if b64:
+                    if tts_first_audio_ms == 0.0:
+                        tts_first_audio_ms = round((time.perf_counter() - t0) * 1000, 1)
+                    event_q.put((
+                        "audio_chunk",
+                        {"index": tts_chunk_idx, "text": sentence, "audio_base64": b64},
+                    ))
+                    tts_chunk_idx += 1
+
+        tts_task = asyncio.create_task(_tts_worker())
+        event_q.put(("status", {"status": "thinking"}))
+
+        async def _on_event(ev: dict):
+            nonlocal spoken_buf, deltas_seen
+            if not isinstance(ev, dict):
+                return
+            ev_type = ev.get("type")
+            if ev_type == "status":
+                event_q.put(("status", {"status": ev.get("status") or ev.get("stage") or "working"}))
+            elif ev_type == "tool":
+                event_q.put(("tool", {"name": ev.get("name", ""), "status": ev.get("status", "ok")}))
+            elif ev_type == "delta":
+                tok = str(ev.get("delta") or "")
+                if not tok:
+                    return
+                deltas_seen = True
+                event_q.put(("delta", {"delta": tok}))
+                if include_audio:
+                    spoken_buf += tok
+                    sentences, spoken_buf = pop_complete_sentences(spoken_buf)
+                    for sent in sentences:
+                        await tts_q.put(sent)
+
+        try:
+            used_agent_core = bool(
+                kernel and getattr(kernel, "agent_orchestrator", None) and is_agent_core_enabled()
+            )
+            result = None
+            inspect_handler = _maybe_direct_vision(msg, uid)
+            if inspect_handler:
+                try:
+                    event_q.put(("status", {"status": "inspecting screen"}))
+                    v_res = await asyncio.wait_for(
+                        inspect_handler({"query": msg, "user_id": uid}), timeout=15.0
+                    )
+                    if v_res and v_res.get("analysis"):
+                        result = {"response": v_res["analysis"], "route": "vision", "tier": 0, "tag": "action"}
+                except Exception as v_err:
+                    log_agent("http_stream_vision", 0.0, "warn", err=type(v_err).__name__)
+
+            if not result:
+                if used_agent_core:
+                    result = await kernel.agent_orchestrator.handle_turn(
+                        msg,
+                        user_id=uid,
+                        channel="hud",
+                        session_id=session_id,
+                        on_event=_on_event,
+                    )
+                else:
+                    result = await kernel.input_handler.process_query(
+                        msg,
+                        speak=False,
+                        user_id=uid,
+                        channel="hud",
+                        session_id=session_id,
+                    )
+                    legacy_text = str(result.get("response") or "")
+                    if legacy_text:
+                        event_q.put(("delta", {"delta": legacy_text}))
+
+            raw_reply = str(result.get("response") or "Done.")
+            raw_sources = normalize_sources(result.get("sources") or [])
+            if result.get("speech_text"):
+                shaped_text = raw_reply
+                speech_text = str(result.get("speech_text"))
+            else:
+                shaped = shape_response(raw_reply, channel="hud", sources=raw_sources)
+                shaped_text = shaped["text"]
+                speech_text = shaped["speech_text"]
+                result = {**result, "response": shaped_text, "speech_text": speech_text}
+
+            if include_audio:
+                if deltas_seen and spoken_buf.strip():
+                    await tts_q.put(spoken_buf.strip())
+                    spoken_buf = ""
+                elif not deltas_seen and speech_text:
+                    for sent in split_sentences(speech_text):
+                        await tts_q.put(sent)
+
+            await tts_q.put(None)
+            await tts_task
+
+            total_ms = round((time.perf_counter() - t0) * 1000, 1)
+            payload = _build_chat_response_payload(
+                msg,
+                result,
+                sources=raw_sources,
+                tts_first_audio_ms=tts_first_audio_ms,
+            )
+            if "total_ms" not in payload["timings"]:
+                payload["timings"]["total_ms"] = total_ms
+
+            if not used_agent_core:
+                _get_telemetry_recorder().record(
+                    user_id=uid,
+                    tier=payload["tier"],
+                    channel="hud",
+                    tag=payload["tag"],
+                    total_ms=total_ms,
+                    tts_first_audio_ms=tts_first_audio_ms,
+                    tools=payload["tools"],
+                    success=True,
+                )
+
+            log_agent(
+                "http_chat_stream",
+                total_ms,
+                "ok",
+                tier=payload["tier"],
+                tag=payload["tag"],
+                tts_chunks=tts_chunk_idx,
+            )
+            event_q.put(("final", payload))
+        except Exception as err:
+            try:
+                await tts_q.put(None)
+                await tts_task
+            except Exception:
+                pass
+            total_ms = round((time.perf_counter() - t0) * 1000, 1)
+            log_agent("http_chat_stream", total_ms, "error", err=type(err).__name__)
+            event_q.put(("error", {"status": "error", "error": str(err)}))
+        finally:
+            event_q.put(None)
+
+    if kernel_loop and kernel_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_produce_stream(), kernel_loop)
+    else:
+        threading.Thread(target=lambda: asyncio.run(_produce_stream()), daemon=True).start()
+
+    def _sse_generator():
+        while True:
+            item = event_q.get()
+            if item is None:
+                break
+            ev_name, ev_payload = item
+            yield f"event: {ev_name}\ndata: {json.dumps(ev_payload)}\n\n"
+
+    return Response(
+        stream_with_context(_sse_generator()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/api/telemetry", methods=["GET"])
+@require_auth
+def api_telemetry(user):
+    """Return strictly per-user non-PII latency, tier distribution, and success rate aggregates."""
+    try:
+        raw_hours = request.args.get("hours", "24")
+        window_hours = max(1.0, min(720.0, float(raw_hours)))
+    except Exception:
+        window_hours = 24.0
+    summary = _get_telemetry_recorder().get_summary(user_id=user["id"], window_hours=window_hours)
+    return jsonify({"status": "success", "data": summary})
 
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    """System health, key pool count, and kernel status."""
+    """System health, key pool count, kernel status, and optional per-user telemetry."""
     online_count = len(device_channel._connections) if device_channel else 0
-    return jsonify({
+    payload = {
         "status": "online",
         "kernel_running": kernel is not None and kernel.running,
         "devices_online": online_count,
@@ -320,8 +650,16 @@ def api_status():
             "gemini": 5,
             "mistral": 5
         },
-        "voice_engine": "Microsoft Edge Neural (en-IN-PrabhatNeural)"
-    })
+        "agent_core_enabled": is_agent_core_enabled(),
+        "voice_engine": "Microsoft Edge Neural (en-IN-PrabhatNeural)",
+    }
+    auth_user = get_authenticated_user()
+    if auth_user:
+        payload["telemetry"] = _get_telemetry_recorder().get_summary(
+            user_id=auth_user["id"],
+            window_hours=24.0,
+        )
+    return jsonify(payload)
 
 
 # =====================================================================

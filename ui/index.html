@@ -57,6 +57,13 @@
                 </svg>
                 <span>Vision &amp; Hardware</span>
             </button>
+            <button class="nav-item" data-tab="whatsapp-view" id="nav-whatsapp">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                </svg>
+                <span>WhatsApp</span>
+                <span class="wa-nav-dot" id="wa-nav-dot" title="WhatsApp status: checking"></span>
+            </button>
         </nav>
 
         <!-- Voice Mode -->
@@ -96,6 +103,14 @@
                 </div>
             </div>
             <div class="hud-right">
+                <button class="wa-hud-pill offline" id="wa-hud-status-pill" title="Open WhatsApp Status &amp; Pairing Mode" type="button">
+                    <span class="wa-hud-dot" id="wa-hud-dot"></span>
+                    <span id="wa-hud-label">WA: Checking</span>
+                </button>
+                <div class="mic-privacy-pill" id="mic-privacy-pill" title="Microphone: Inactive (Press Ctrl+Space to talk)">
+                    <span class="mic-dot"></span>
+                    <span id="mic-privacy-label">MIC IDLE</span>
+                </div>
                 <a href="/download/windows-agent" class="hud-download-btn" id="btn-download-app" title="Download Windows Companion Agent (.exe)" download="AIVA-Device-Agent-Setup-1.0.0.exe">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -147,12 +162,18 @@
                     </div>
                 </div>
 
+                <!-- Voice Caption Bar -->
+                <div id="voice-caption-bar" class="voice-caption-bar hidden">
+                    <div class="caption-pulse"></div>
+                    <span class="caption-speaker" id="caption-speaker">AIVA</span>
+                    <span class="caption-text" id="caption-text">Listening...</span>
+                </div>
                 <div class="chat-input-bar">
                     <button class="icon-btn" id="btn-screen-context" title="Attach screen context">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </button>
                     <input type="text" id="user-prompt-input" placeholder="Type a command or ask anything..." autocomplete="off">
-                    <button class="icon-btn mic-btn" id="btn-mic-input" title="Voice input">
+                    <button class="icon-btn mic-btn" id="btn-mic-input" title="Voice input (Ctrl+Space)">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -216,8 +237,19 @@
                     <p class="section-title">Engine Stats</p>
                     <div class="stat-boxes">
                         <div class="stat-box glass-card">
-                            <span class="stat-label">Patterns</span>
-                            <span class="stat-val" id="stat-patterns-count">—</span>
+                            <span class="stat-label">Tier Mix</span>
+                            <span class="stat-val" id="stat-tier-mix">0 / 0 / 0</span>
+                            <span class="stat-sub" id="stat-tier-pct">T0 / T1 / T2</span>
+                        </div>
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Latency p50/p95</span>
+                            <span class="stat-val" id="stat-latency-p5095">—</span>
+                            <span class="stat-sub">ms (24h)</span>
+                        </div>
+                        <div class="stat-box glass-card">
+                            <span class="stat-label">Success Rate</span>
+                            <span class="stat-val text-green" id="stat-success-rate">—</span>
+                            <span class="stat-sub" id="stat-total-requests">0 turns</span>
                         </div>
                         <div class="stat-box glass-card">
                             <span class="stat-label">Groq Pool</span>
@@ -262,17 +294,99 @@
 
         <!-- ── Tab 3: Memory & Skills ────────────────────────────────── -->
         <section class="tab-pane" id="memory-view">
-            <div class="memory-grid">
-                <div class="memory-column glass-panel">
-                    <h3>User Identity</h3>
-                    <div class="memory-list" id="user-facts-list">
-                        <!-- populated per authenticated user -->
+            <div class="memory-workspace">
+                <div class="memory-toolbar">
+                    <div class="memory-search-wrap">
+                        <input type="text" id="mem-search-input" class="mem-input" placeholder="Search memories, entities, reminders...">
+                    </div>
+                    <div class="mem-filter-pills" id="mem-filter-pills">
+                        <button class="mem-pill active" data-type="">All</button>
+                        <button class="mem-pill" data-type="semantic">Semantic</button>
+                        <button class="mem-pill" data-type="episodic">Episodic</button>
+                        <button class="mem-pill" data-type="procedural">Procedural</button>
+                        <button class="mem-pill" data-type="prospective">Prospective</button>
+                        <button class="mem-pill" data-type="knowledge">Knowledge</button>
+                        <button class="mem-pill" data-type="working">Working</button>
+                    </div>
+                    <div class="memory-actions">
+                        <button class="mem-btn mem-btn-secondary" id="btn-mem-export">Export JSON</button>
+                        <button class="mem-btn mem-btn-danger" id="btn-mem-forget-all">Forget Everything</button>
                     </div>
                 </div>
-                <div class="memory-column glass-panel">
-                    <h3>Learned Task Recipes</h3>
-                    <div class="memory-list" id="task-recipes-list">
-                        <!-- populated per authenticated user -->
+
+                <div class="memory-controls-bar">
+                    <label class="mem-toggle-label">
+                        <input type="checkbox" id="mem-toggle-enabled" checked>
+                        <span>Memory Enabled</span>
+                    </label>
+                    <label class="mem-toggle-label">
+                        <input type="checkbox" id="mem-toggle-paused">
+                        <span>Pause Learning</span>
+                    </label>
+                    <label class="mem-toggle-label">
+                        <input type="checkbox" id="mem-toggle-briefing">
+                        <span>Morning Briefing</span>
+                    </label>
+                    <div class="mem-quiet-group">
+                        <span class="mem-muted-label">Quiet Hours</span>
+                        <input type="text" id="mem-quiet-start" class="mem-input mem-input-sm" value="23:00" placeholder="23:00" maxlength="5">
+                        <span class="mem-muted-label">-</span>
+                        <input type="text" id="mem-quiet-end" class="mem-input mem-input-sm" value="07:00" placeholder="07:00" maxlength="5">
+                    </div>
+                    <div class="mem-quiet-group">
+                        <span class="mem-muted-label">Channel</span>
+                        <select id="mem-pref-channel" class="mem-input mem-select-sm">
+                            <option value="hud">HUD</option>
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="voice">Voice</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="memory-grid">
+                    <div class="memory-column glass-panel">
+                        <div class="mem-col-header">
+                            <h3>Memories</h3>
+                            <span class="mem-count-badge" id="mem-total-count">0</span>
+                        </div>
+                        <div class="memory-list" id="memories-grouped-list">
+                            <!-- populated per authenticated user -->
+                        </div>
+                    </div>
+                    <div class="memory-column memory-side-stack">
+                        <div class="mem-subpanel glass-panel">
+                            <div class="mem-col-header">
+                                <h3>Reminders &amp; Commitments</h3>
+                                <span class="mem-count-badge" id="mem-reminders-count">0</span>
+                            </div>
+                            <div class="mem-reminder-form">
+                                <input type="text" id="mem-rem-text" class="mem-input" placeholder="Remind me to...">
+                                <input type="text" id="mem-rem-due" class="mem-input" placeholder="e.g. tomorrow 9am or ISO">
+                                <button class="mem-btn mem-btn-primary" id="btn-mem-add-rem">Add</button>
+                            </div>
+                            <div class="memory-list" id="reminders-list">
+                                <!-- populated per authenticated user -->
+                            </div>
+                        </div>
+
+                        <div class="mem-subpanel glass-panel">
+                            <div class="mem-col-header">
+                                <h3>Entities &amp; Graph</h3>
+                                <span class="mem-count-badge" id="mem-entities-count">0</span>
+                            </div>
+                            <div class="memory-list" id="entities-list">
+                                <!-- populated per authenticated user -->
+                            </div>
+                        </div>
+
+                        <div class="mem-subpanel glass-panel">
+                            <div class="mem-col-header">
+                                <h3>Learned Task Recipes</h3>
+                            </div>
+                            <div class="memory-list" id="task-recipes-list">
+                                <!-- populated per authenticated user -->
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -298,7 +412,138 @@
                         <li><span class="cap-badge">inspect_screen</span> Gemini 2.5 multimodal vision</li>
                         <li><span class="cap-badge">media_control</span> Play, pause, skip system audio</li>
                         <li><span class="cap-badge">adjust_volume</span> Win32 system audio control</li>
+                        <li><span class="cap-badge">whatsapp_send</span> Baileys message dispatch to saved contacts</li>
+                        <li><span class="cap-badge">whatsapp_lookup_contact</span> Contact alias &amp; phone resolution</li>
                     </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- WhatsApp Settings & Contacts View -->
+        <section class="tab-pane" id="whatsapp-view">
+            <div class="whatsapp-container" style="flex: 1; overflow-y: auto; padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-6);">
+                
+                <div class="pane-header" style="margin-bottom: var(--space-4); border-bottom: 1px solid var(--border); padding-bottom: var(--space-4); display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap;">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.25rem; font-weight: 600; color: var(--text);">WhatsApp Channel</h2>
+                        <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: var(--text-2);">Monitor Baileys bridge status, pair a WhatsApp device, and manage authorized contacts.</p>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: var(--space-2);">
+                        <button type="button" id="wa-btn-refresh-status" class="wa-btn wa-btn-secondary" title="Refresh WhatsApp Status">Refresh</button>
+                        <span id="wa-bridge-badge" class="tag-pill" style="font-size: 0.75rem; padding: 4px 10px;">Checking Bridge...</span>
+                    </div>
+                </div>
+
+                <div class="wa-channel-grid">
+                    
+                    <!-- Left: Connection Status, Device Pairing Mode & Link Number Flow -->
+                    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4);">
+                        <h3 style="margin: 0; font-size: 1rem; color: var(--text); font-weight: 600;">Bridge Status &amp; Pairing Mode</h3>
+                        
+                        <div id="wa-status-details" style="font-size: 0.85rem; color: var(--text-2); line-height: 1.5; background: var(--elevated); padding: var(--space-3); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+                            Loading status...
+                        </div>
+
+                        <!-- Device Pairing Mode Card -->
+                        <div class="wa-pair-panel" id="wa-pairing-panel">
+                            <div class="wa-pair-header">
+                                <div>
+                                    <div class="wa-pair-title">Device Pairing Mode</div>
+                                    <div class="wa-pair-subtitle">Link AIVA's cloud bridge to WhatsApp without SSH or CLI.</div>
+                                </div>
+                                <span id="wa-pair-phase-badge" class="wa-phase-badge">Idle</span>
+                            </div>
+
+                            <div class="wa-pair-tabs" role="tablist" aria-label="WhatsApp Pairing Method">
+                                <button type="button" class="wa-pair-tab active" id="wa-pair-tab-qr" data-mode="qr">QR Code Scan</button>
+                                <button type="button" class="wa-pair-tab" id="wa-pair-tab-code" data-mode="code">Phone Number Code</button>
+                            </div>
+
+                            <div id="wa-pair-phone-row" class="wa-pair-phone-row" style="display: none;">
+                                <label for="wa-pair-phone-input" class="wa-pair-label">WhatsApp Phone Number (country code + digits, no +)</label>
+                                <input type="text" id="wa-pair-phone-input" class="wa-pair-input" placeholder="e.g. 919493867075" autocomplete="off">
+                            </div>
+
+                            <div class="wa-pair-actions">
+                                <button type="button" id="wa-btn-pair-start" class="wa-btn wa-btn-primary">Start QR Pairing</button>
+                                <button type="button" id="wa-btn-pair-cancel" class="wa-btn wa-btn-secondary" style="display: none;">Cancel</button>
+                                <button type="button" id="wa-btn-pair-logout" class="wa-btn wa-btn-danger" title="Disconnect and clear saved WhatsApp credentials">Unpair / Reset</button>
+                            </div>
+
+                            <div id="wa-pair-owner-note" class="wa-pair-note" style="display: none;"></div>
+
+                            <div id="wa-pair-output" class="wa-pair-output" style="display: none;">
+                                <div id="wa-pair-status-msg" class="wa-pair-status-msg"></div>
+
+                                <div id="wa-pair-qr-box" class="wa-pair-qr-box" style="display: none;">
+                                    <div class="wa-pair-qr-frame">
+                                        <img id="wa-pair-qr-img" alt="WhatsApp QR Code">
+                                    </div>
+                                    <p class="wa-pair-hint">Open WhatsApp on your phone → <strong>Linked Devices</strong> → <strong>Link a Device</strong> → scan this QR code.</p>
+                                </div>
+
+                                <div id="wa-pair-code-box" class="wa-pair-code-box" style="display: none;">
+                                    <div class="wa-pair-code-row">
+                                        <span id="wa-pair-code-text" class="wa-pair-code-value">---- ----</span>
+                                        <button type="button" id="wa-btn-copy-pair-code" class="wa-btn wa-btn-secondary">Copy</button>
+                                    </div>
+                                    <p class="wa-pair-hint">Open WhatsApp → <strong>Linked Devices</strong> → <strong>Link a Device</strong> → <strong>Link with phone number instead</strong> → enter this 8-character code.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wa-section-divider"></div>
+                        <h4 style="margin: 0; font-size: 0.9rem; color: var(--text); font-weight: 600;">Personal Account Number Linking</h4>
+
+                        <!-- Link Flow Form -->
+                        <div style="display: flex; flex-direction: column; gap: var(--space-2);">
+                            <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-2);">Link a Phone Number</label>
+                            <div style="display: flex; gap: var(--space-2);">
+                                <input type="text" id="wa-link-phone-input" placeholder="e.g. 919876543210 (digits only)" style="flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.85rem; outline: none;">
+                                <button id="wa-btn-start-link" style="background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600; cursor: pointer;">Generate Code</button>
+                            </div>
+                        </div>
+
+                        <!-- Generated Code Box -->
+                        <div id="wa-code-display" style="display: none; background: rgba(99, 102, 241, 0.1); border: 1px dashed var(--accent); border-radius: var(--radius-sm); padding: var(--space-4); text-align: center;">
+                            <div style="font-size: 0.8rem; color: var(--text-2); margin-bottom: 4px;">SEND THIS TO AIVA VIA WHATSAPP</div>
+                            <div id="wa-code-text" style="font-size: 1.8rem; font-weight: 800; letter-spacing: 4px; color: #38bdf8; font-family: monospace;">------</div>
+                            <div style="font-size: 0.8rem; color: var(--text-2); margin-top: 8px;">
+                                Send <code style="background: var(--elevated); padding: 2px 6px; border-radius: 4px; color: var(--text);">LINK &lt;CODE&gt;</code> to AIVA's WhatsApp within 10 minutes.
+                            </div>
+                        </div>
+
+                        <!-- Active Links List -->
+                        <div id="wa-active-links-list" style="margin-top: var(--space-2); display: flex; flex-direction: column; gap: 8px;">
+                        </div>
+                    </div>
+
+                    <!-- Right: Add & Manage Contacts -->
+                    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4);">
+                        <h3 style="margin: 0; font-size: 1rem; color: var(--text); font-weight: 600;">Saved Contacts</h3>
+                        
+                        <!-- Add Contact Inline Form -->
+                        <div style="background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3);">
+                            <div style="font-size: 0.85rem; font-weight: 600; color: var(--text);">Add Contact</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2);">
+                                <input type="text" id="wa-new-name" placeholder="Name (e.g. Dad)" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 0.8rem; outline: none;">
+                                <input type="text" id="wa-new-phone" placeholder="Phone (e.g. 919876543210)" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 0.8rem; outline: none;">
+                            </div>
+                            <input type="text" id="wa-new-aliases" placeholder="Aliases (comma-separated, e.g. papa, nanna)" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 0.8rem; outline: none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <label style="font-size: 0.8rem; color: var(--text-2); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="wa-new-trusted" checked>
+                                    <span>Trusted</span>
+                                </label>
+                                <button id="wa-btn-add-contact" style="background: linear-gradient(135deg, var(--accent), #38bdf8); color: #fff; border: none; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; cursor: pointer;">Save Contact</button>
+                            </div>
+                        </div>
+
+                        <!-- Contacts List -->
+                        <div id="wa-contacts-list" style="display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto;">
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </section>
@@ -385,6 +630,9 @@
     </div>
 </div>
 
+<script src="vendor/purify.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="voice-manager.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
