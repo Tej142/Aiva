@@ -306,8 +306,10 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
              patch("services.whatsapp_service.WHATSAPP_BRIDGE_SECRET", "test-bridge-secret"):
             client = aiva_server.app.test_client()
 
-            # Unauthenticated /api/whatsapp/messages -> 401
-            self.assertEqual(client.get("/api/whatsapp/messages").status_code, 401)
+            # Unauthenticated /api/whatsapp/messages -> 401 (even if a companion device is connected!)
+            fake_dc = SimpleNamespace(_device_user_map={"dev_online": self.uid_a})
+            with patch.object(aiva_server, "device_channel", fake_dc):
+                self.assertEqual(client.get("/api/whatsapp/messages").status_code, 401)
 
             # User A sees Dad's flight message; User B does NOT
             resp_a = client.get(

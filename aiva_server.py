@@ -169,14 +169,6 @@ def get_authenticated_user():
             if user:
                 return user
 
-    # Fallback 2: Connected companion device channel session fallback
-    if device_channel and hasattr(device_channel, '_device_user_map') and device_channel._device_user_map:
-        online_user_id = next(iter(device_channel._device_user_map.values()), None)
-        if online_user_id:
-            user = db.get_user_by_id(online_user_id)
-            if user:
-                return user
-
     return None
 
 
