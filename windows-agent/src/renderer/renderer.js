@@ -563,7 +563,21 @@ async function initMainView() {
     };
   }
 
-  // Handle token request from embedded frame
+  // Handle messages from embedded HUD iframe (auth sync & WhatsApp status updates)
+  const titleWaPill = document.getElementById('title-wa-pill');
+  const titleWaDot = document.getElementById('title-wa-dot');
+  const titleWaText = document.getElementById('title-wa-text');
+
+  if (titleWaPill) {
+    titleWaPill.addEventListener('click', () => {
+      const assistantNav = document.getElementById('nav-assistant');
+      if (assistantNav) assistantNav.click();
+      if (hudFrame && hudFrame.contentWindow) {
+        hudFrame.contentWindow.postMessage({ type: 'AIVA_NAVIGATE_TAB', tab: 'whatsapp-view' }, '*');
+      }
+    });
+  }
+
   window.addEventListener('message', async (event) => {
     if (event.data && event.data.type === 'AIVA_REQUEST_AUTH') {
       try {
@@ -576,6 +590,24 @@ async function initMainView() {
         }
       } catch (err) {
         console.warn('Error bridging auth session to iframe:', err);
+      }
+    } else if (event.data && event.data.type === 'AIVA_WHATSAPP_STATUS') {
+      const msg = event.data;
+      if (titleWaDot) {
+        if (msg.connected) {
+          titleWaDot.className = 'status-dot online';
+        } else if (msg.stateClass === 'pairing' || msg.stateClass === 'warning') {
+          titleWaDot.className = 'status-dot connecting';
+        } else {
+          titleWaDot.className = 'status-dot offline';
+        }
+      }
+      if (titleWaText) {
+        titleWaText.textContent = msg.shortText || (msg.connected ? 'WA: Connected' : 'WA: Offline');
+      }
+      if (titleWaPill) {
+        const phoneHint = msg.phone_masked ? ` (${msg.phone_masked})` : '';
+        titleWaPill.title = `WhatsApp ${msg.status || 'unknown'}${phoneHint} — click to manage pairing`;
       }
     }
   });
@@ -790,6 +822,24 @@ async function initMainView() {
       }
     }
   });
+
+  if (window.aivaAgent.onVoiceTogglePtt) {
+    window.aivaAgent.onVoiceTogglePtt(() => {
+      const frame = document.getElementById('embedded-hud-frame');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ type: 'AIVA_VOICE_PTT_TRIGGER' }, '*');
+      }
+    });
+  }
+
+  if (window.aivaAgent.onVoiceWakeWord) {
+    window.aivaAgent.onVoiceWakeWord((data) => {
+      const frame = document.getElementById('embedded-hud-frame');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ type: 'AIVA_WAKE_WORD_TRIGGER', word: (data && data.word) || 'Hey AIVA' }, '*');
+      }
+    });
+  }
 
   window.aivaAgent.onActivityLog((item) => {
     if (!item) return;

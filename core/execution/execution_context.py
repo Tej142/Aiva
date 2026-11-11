@@ -68,16 +68,8 @@ class ExecutionContext:
         return getattr(self.kernel, "voice_service", None)
 
     @property
-    def memory_service(self):
-        return getattr(self.kernel, "memory_service", None)
-
-    @property
-    def user_memory_service(self):
-        return getattr(self.kernel, "user_memory_service", None)
-
-    @property
-    def conversation_memory_service(self):
-        return getattr(self.kernel, "conversation_memory_service", None)
+    def memory_engine(self):
+        return getattr(self.kernel, "memory_engine", None)
 
     @property
     def browser_service(self):

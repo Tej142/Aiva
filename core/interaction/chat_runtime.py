@@ -75,11 +75,14 @@ class ChatRuntime:
                     continue
 
 
+                uid = getattr(self.kernel, "active_user_id", None)
                 should_continue = await (
 
                     self.input_handler
                     .process_input(
-                        user_input
+                        user_input,
+                        user_id=uid,
+                        channel="voice",
                     )
 
                 )

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, session } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, session, globalShortcut } = require('electron');
 const path = require('path');
 const os = require('os');
 
@@ -6,6 +6,7 @@ const SecureStore = require('./secure-store');
 const PermissionsManager = require('./permissions');
 const DeviceActionExecutor = require('./executor');
 const DeviceWebSocketClient = require('./ws-client');
+const LocalWakeWordEngine = require('./wake-word-engine');
 
 // Enforce single instance lock to prevent duplicate processes from fighting over the WebSocket
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -16,6 +17,7 @@ if (!gotSingleInstanceLock) {
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+let wakeEngine = null;
 
 const store = new SecureStore();
 
@@ -73,6 +75,16 @@ function updateTrayMenu() {
   const contextMenu = Menu.buildFromTemplate([
     { label: 'AIVA Device Agent', enabled: false },
     { label: statusText, enabled: false },
+    {
+      label: '🎙️ Voice Command (Ctrl+Space)',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('voice:toggle_ptt');
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: 'Open AIVA',
@@ -623,6 +635,46 @@ app.whenReady().then(() => {
   setupIpcHandlers();
   createWindow();
 
+  // Register Global Push-to-Talk Hotkey (Ctrl+Space)
+  try {
+    globalShortcut.unregisterAll();
+    const pttHotkey = store.get('voicePttHotkey', 'CommandOrControl+Space');
+    const registered = globalShortcut.register(pttHotkey, () => {
+      console.log(`[VoicePTT] Global hotkey ${pttHotkey} triggered`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (!mainWindow.isVisible()) {
+          mainWindow.show();
+        }
+        mainWindow.focus();
+        mainWindow.webContents.send('voice:toggle_ptt');
+      }
+    });
+    if (registered) {
+      console.log(`[VoicePTT] Registered global hotkey: ${pttHotkey}`);
+    } else {
+      console.warn(`[VoicePTT] Could not register global hotkey: ${pttHotkey}`);
+    }
+  } catch (pttErr) {
+    console.error('[VoicePTT] Error registering shortcut:', pttErr);
+  }
+
+  // Initialize Native Offline Windows Wake Word Engine ("Hey AIVA" / "Jarvis")
+  try {
+    wakeEngine = new LocalWakeWordEngine((recognizedWord, confidence) => {
+      console.log(`[VoiceWake] Wake word "${recognizedWord}" recognized (confidence: ${confidence})`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (!mainWindow.isVisible()) {
+          mainWindow.show();
+        }
+        mainWindow.focus();
+        mainWindow.webContents.send('voice:wake_word_triggered', { word: recognizedWord });
+      }
+    });
+    wakeEngine.start();
+  } catch (wakeErr) {
+    console.error('[VoiceWake] Could not start wake word engine:', wakeErr);
+  }
+
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
   if (deviceToken) {
     wsClient.connect();
@@ -648,5 +700,9 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  try { globalShortcut.unregisterAll(); } catch {}
+  if (wakeEngine) {
+    wakeEngine.stop();
+  }
   if (wsClient) wsClient.disconnect();
 });

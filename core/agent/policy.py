@@ -177,3 +177,4 @@ def evaluate_tool_risk(
         )
 
     return RiskDecision(allowed=True, risk_level=base_risk)
+

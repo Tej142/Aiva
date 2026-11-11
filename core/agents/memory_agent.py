@@ -3,68 +3,53 @@ from core.agents.base_agent import BaseAgent
 
 class MemoryAgent(BaseAgent):
 
-    def __init__(self, **kwargs):
-
-        super().__init__(
-            name="memory_agent",
-            **kwargs
-        )
-
+    def __init__(self, get_active_user_id=None, **kwargs):
+        super().__init__(name="memory_agent", **kwargs)
+        self.get_active_user_id = get_active_user_id
         self.capabilities = [
             "memory_management",
             "context_tracking",
-            "runtime_persistence"
+            "runtime_persistence",
         ]
-
-        self.subscriptions = [
-            "*"
-        ]
+        self.subscriptions = ["*"]
 
     async def initialize(self):
-
         self.state["status"] = "ready"
-
         print("[MemoryAgent] Initialized")
 
     async def handle_event(self, event):
-
         event_type = event.get("type")
-
-        print(f"[MemoryAgent] Observed event: {event_type}")
-
-        # ======================================
-        # Store Important Runtime Events
-        # ======================================
-
-        important_events = [
+        important_events = {
             "goal.created",
             "workflow.completed",
             "workflow.failed",
             "youtube.detected",
-            "browser.navigation.completed"
-        ]
-
+            "browser.navigation.completed",
+        }
         if event_type in important_events:
-
             await self.store_runtime_event(event)
 
     async def execute(self, task):
-
-        print(f"[MemoryAgent] Executing task: {task}")
+        query = (task or {}).get("query") or ""
+        uid = (task or {}).get("user_id") or (self.get_active_user_id() if self.get_active_user_id else None)
+        if self.memory_engine and uid and query:
+            return self.memory_engine.recall(uid, query)
+        return None
 
     async def store_runtime_event(self, event):
-
+        if not self.memory_engine:
+            return
         event_type = event.get("type")
+        data = event.get("data", {}) or {}
+        uid = data.get("user_id") or (self.get_active_user_id() if self.get_active_user_id else None)
+        if not uid:
+            return
 
-        data = event.get("data", {})
-
-        memory_key = f"event:{event_type}"
-
-        self.memory_service.remember(
-            memory_key,
-            data
-        )
-
-        print(
-            f"[MemoryAgent] Stored memory: {memory_key}"
+        goal_or_url = data.get("goal") or data.get("url") or event_type
+        summary = f"{event_type}: {str(goal_or_url)[:160]}"
+        self.memory_engine.record_system_event(
+            user_id=uid,
+            event_summary=summary,
+            importance=0.35,
+            channel=data.get("channel") or "hud",
         )

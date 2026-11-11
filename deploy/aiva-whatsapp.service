@@ -1,0 +1,17 @@
+[Unit]
+Description=AIVA WhatsApp Linked Device Bridge (Baileys)
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc/aiva/services/whatsapp-bridge
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+

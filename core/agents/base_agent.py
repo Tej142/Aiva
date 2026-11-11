@@ -9,13 +9,13 @@ class BaseAgent(ABC):
         name: str,
         event_bus=None,
         state_manager=None,
-        memory_service=None
+        memory_engine=None
     ):
         self.name = name
 
         self.event_bus = event_bus
         self.state_manager = state_manager
-        self.memory_service = memory_service
+        self.memory_engine = memory_engine
 
         self.capabilities: List[str] = []
         self.subscriptions: List[str] = []

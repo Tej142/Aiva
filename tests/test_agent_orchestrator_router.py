@@ -208,6 +208,38 @@ class TestAgentOrchestratorAndRouter(unittest.TestCase):
             else:
                 os.environ["AIVA_AGENT_CORE"] = prev
 
+    def test_tier2_escalate_only_does_not_crash_with_empty_exec_calls(self):
+        """Calling escalate when already on Tier 2 must cleanly guide completion instead of raising IndexError."""
+        from core.agent.llm_gateway import LLMGateway, LLMResponse, LLMToolCall
+        calls = {"n": 0}
+
+        class _EscalateAtTier2GW(LLMGateway):
+            def __init__(self):
+                super().__init__(secrets={})
+
+            async def complete(self, messages, **kwargs):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return LLMResponse(
+                        tool_calls=[LLMToolCall(id="tc_esc", name="escalate", arguments={"reason": "test"})],
+                        provider="gemini",
+                        model="gemini-3-flash-preview",
+                    )
+                return LLMResponse(text="Synthesized final answer cleanly.", provider="gemini", model="gemini-3-flash-preview")
+
+        orch = AgentOrchestrator(
+            registry=self.registry,
+            llm_gateway=_EscalateAtTier2GW(),
+            memory_engine=self.mem,
+        )
+        outcome = asyncio.run(
+            orch.handle_turn("deep dive compare postgres and sqlite", user_id=self.user_a, channel="hud")
+        )
+        self.assertEqual(outcome["tier"], 2)
+        self.assertEqual(calls["n"], 2)
+        self.assertIn("Synthesized final answer cleanly", outcome["response"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

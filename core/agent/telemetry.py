@@ -189,3 +189,4 @@ class TelemetryRecorder:
             "top_tools": top_tools,
             "window_hours": window_hours,
         }
+

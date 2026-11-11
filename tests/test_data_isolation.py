@@ -8,8 +8,8 @@ from aiva_server import app
 from services.database_service import DatabaseService
 from services.auth_service import AuthService
 from services.device_manager import DeviceManager
-from services.user_memory_service import UserMemoryService
-from services.conversation_memory_service import ConversationMemoryService
+from core.memory import MemoryEngine
+from core.memory.models import MemoryItem, MemoryType, MemorySource, new_id
 
 
 class TestDataIsolation(unittest.TestCase):
@@ -21,15 +21,16 @@ class TestDataIsolation(unittest.TestCase):
         self.db = DatabaseService(db_path=self.temp_db_path)
         self.auth_service = AuthService(db=self.db)
         self.device_manager = DeviceManager(db=self.db)
-        self.user_memory = UserMemoryService(db=self.db)
-        self.conv_memory = ConversationMemoryService(db=self.db)
+        self.memory_engine = MemoryEngine(db=self.db, start_worker=False)
 
         # Flask test client
         app.config["TESTING"] = True
         import aiva_server
+        aiva_server.kernel = None
         aiva_server.db = self.db
         aiva_server.auth_service = self.auth_service
         aiva_server.device_manager = self.device_manager
+        aiva_server._fallback_memory_engine = self.memory_engine
         self.client = app.test_client()
 
         # Create two distinct test users
@@ -41,6 +42,7 @@ class TestDataIsolation(unittest.TestCase):
 
     def tearDown(self):
         try:
+            self.memory_engine.shutdown()
             if hasattr(self.db, "_local") and hasattr(self.db._local, "conn") and self.db._local.conn:
                 self.db._local.conn.close()
                 self.db._local.conn = None
@@ -50,36 +52,73 @@ class TestDataIsolation(unittest.TestCase):
             pass
 
     def test_memory_isolation_between_users(self):
-        """User A and User B store separate facts; neither can see the other's memory."""
-        # 1. User A stores fact
-        self.user_memory.remember("user_aaa_111", "favorite_food", "pizza")
-        self.user_memory.remember("user_aaa_111", "city", "San Francisco")
+        """User A and User B store separate memories; neither can read, edit, or forget the other's."""
+        mem_a_id = new_id()
+        self.memory_engine.store.insert_memory(
+            MemoryItem(
+                id=mem_a_id,
+                user_id="user_aaa_111",
+                type=MemoryType.SEMANTIC.value,
+                content="Alice's favorite food is pizza and she lives in San Francisco.",
+                importance=0.9,
+                source=MemorySource.USER_SAID.value,
+            )
+        )
+        mem_b_id = new_id()
+        self.memory_engine.store.insert_memory(
+            MemoryItem(
+                id=mem_b_id,
+                user_id="user_bbb_222",
+                type=MemoryType.SEMANTIC.value,
+                content="Bob's favorite food is sushi and he owns a dog.",
+                importance=0.9,
+                source=MemorySource.USER_SAID.value,
+            )
+        )
 
-        # 2. User B stores fact
-        self.user_memory.remember("user_bbb_222", "favorite_food", "sushi")
-        self.user_memory.remember("user_bbb_222", "pet", "dog")
-
-        # 3. Read via /api/memory as User A
+        # Read via /api/memory as User A
         resp_a = self.client.get(
             "/api/memory",
             headers={"Authorization": f"Bearer {self.tokens_a['access_token']}"}
         )
         self.assertEqual(resp_a.status_code, 200)
-        data_a = resp_a.get_json()
-        self.assertEqual(data_a["user_memory"].get("favorite_food"), "pizza")
-        self.assertEqual(data_a["user_memory"].get("city"), "San Francisco")
-        self.assertNotIn("pet", data_a["user_memory"])
+        contents_a = [m["content"] for m in resp_a.get_json()["memories"]]
+        self.assertTrue(any("pizza" in c for c in contents_a))
+        self.assertFalse(any("sushi" in c or "dog" in c for c in contents_a))
 
-        # 4. Read via /api/memory as User B
+        # Read via /api/memory as User B
         resp_b = self.client.get(
             "/api/memory",
             headers={"Authorization": f"Bearer {self.tokens_b['access_token']}"}
         )
         self.assertEqual(resp_b.status_code, 200)
-        data_b = resp_b.get_json()
-        self.assertEqual(data_b["user_memory"].get("favorite_food"), "sushi")
-        self.assertEqual(data_b["user_memory"].get("pet"), "dog")
-        self.assertNotIn("city", data_b["user_memory"])
+        contents_b = [m["content"] for m in resp_b.get_json()["memories"]]
+        self.assertTrue(any("sushi" in c for c in contents_b))
+        self.assertFalse(any("pizza" in c or "San Francisco" in c for c in contents_b))
+
+        # Cross-user PATCH and DELETE rejected (404)
+        patch_cross = self.client.patch(
+            f"/api/memory/{mem_a_id}",
+            headers={"Authorization": f"Bearer {self.tokens_b['access_token']}"},
+            json={"content": "Tampered"}
+        )
+        self.assertEqual(patch_cross.status_code, 404)
+
+        del_cross = self.client.delete(
+            f"/api/memory/{mem_a_id}",
+            headers={"Authorization": f"Bearer {self.tokens_b['access_token']}"}
+        )
+        self.assertEqual(del_cross.status_code, 404)
+
+        # Reminder isolation check
+        rem_res = self.memory_engine.create_reminder("user_aaa_111", "Alice dentist", time.time() + 3600)
+        rem_id = rem_res["reminder"]["id"]
+        rem_cross = self.client.patch(
+            f"/api/reminders/{rem_id}",
+            headers={"Authorization": f"Bearer {self.tokens_b['access_token']}"},
+            json={"status": "done"}
+        )
+        self.assertEqual(rem_cross.status_code, 404)
 
     def test_unauthenticated_memory_access_blocked(self):
         """Access to /api/memory without token is rejected with 401."""
@@ -88,10 +127,8 @@ class TestDataIsolation(unittest.TestCase):
 
     def test_conversation_history_isolation(self):
         """User A conversation turns cannot be accessed or deleted by User B."""
-        # Add turns for User A
-        self.conv_memory.add_turn("Hello AIVA, I am Alice", "Hello Alice!", user_id="user_aaa_111")
-        # Add turns for User B
-        self.conv_memory.add_turn("What is quantum computing?", "It is...", user_id="user_bbb_222")
+        self.memory_engine.observe("user_aaa_111", {"user": "Hello AIVA, I am Alice", "assistant": "Hello Alice!"})
+        self.memory_engine.observe("user_bbb_222", {"user": "What is quantum computing?", "assistant": "It is..."})
 
         # User A reads history
         resp_a = self.client.get(
@@ -181,8 +218,11 @@ class TestDataIsolation(unittest.TestCase):
             headers={"Authorization": f"Bearer {new_tokens['access_token']}"}
         )
         self.assertEqual(mem_resp.status_code, 200)
-        self.assertEqual(mem_resp.get_json()["user_memory"], {})
-        self.assertEqual(mem_resp.get_json()["task_patterns"], {})
+        mem_json = mem_resp.get_json()
+        self.assertEqual(mem_json["memories"], [])
+        self.assertEqual(mem_json["entities"], [])
+        self.assertEqual(mem_json["reminders"], [])
+        self.assertEqual(mem_json["task_patterns"], {})
 
         # 3. /api/history is completely empty
         hist_resp = self.client.get(

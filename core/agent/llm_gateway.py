@@ -31,11 +31,17 @@ class LLMResponse:
 
 
 _RATE_LIMIT_MARKERS = ("429", "rate_limit", "rate limit", "quota", "resource_exhausted", "401", "invalid_api_key")
+_MODEL_UNAVAILABLE_MARKERS = ("404", "model_not_found", "not_found", "no longer available")
 
 
 def _is_rotatable_error(err: Exception) -> bool:
     s = str(err).lower()
     return any(m in s for m in _RATE_LIMIT_MARKERS)
+
+
+def _is_model_unavailable_error(err: Exception) -> bool:
+    s = str(err).lower()
+    return any(m in s for m in _MODEL_UNAVAILABLE_MARKERS)
 
 
 def _extract_json_tool_calls(text: str) -> tuple[str, List[LLMToolCall]]:
@@ -85,9 +91,9 @@ def _extract_json_tool_calls(text: str) -> tuple[str, List[LLMToolCall]]:
 class LLMGateway:
     """Pooled async LLM client with key rotation, failover, native tool calling, JSON fallback, and streaming."""
 
-    TIER1_GROQ_MODELS = ("openai/gpt-oss-20b", "llama-3.3-70b-versatile")
-    TIER2_GEMINI_MODELS = ("gemini-2.0-flash",)
-    TIER2_GROQ_MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.8-27b")
+    TIER1_GROQ_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
+    TIER2_GEMINI_MODELS = ("gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite")
+    TIER2_GROQ_MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
     MISTRAL_MODELS = ("mistral-small-latest",)
 
     def __init__(self, secrets: Optional[Dict[str, Any]] = None):
@@ -107,14 +113,16 @@ class LLMGateway:
         self._groq_idx = 0
         self._gemini_idx = 0
         self._mistral_idx = 0
+        self._provider_cooldown: Dict[str, float] = {}
 
     def _make_groq_client(self, api_key: str):
         from groq import AsyncGroq
-        return AsyncGroq(api_key=api_key)
+        return AsyncGroq(api_key=api_key, max_retries=0)
 
     def _make_gemini_client(self, api_key: str):
         from google import genai
-        return genai.Client(api_key=api_key)
+        from google.genai import types
+        return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=12000))
 
     def _make_mistral_client(self, api_key: str):
         from mistralai import Mistral
@@ -140,9 +148,20 @@ class LLMGateway:
     ) -> LLMResponse:
         """Execute a pooled chat/tool call using Tier 1 (fast Groq) or Tier 2 (Gemini/stronger)."""
         if tier >= 2:
-            providers = ("gemini", "groq", "mistral")
+            base_providers = ("gemini", "groq", "mistral")
         else:
-            providers = ("groq", "gemini", "mistral")
+            base_providers = ("groq", "gemini", "mistral")
+
+        now_m = time.monotonic()
+        with_keys = [
+            p for p in base_providers
+            if (p == "groq" and self.groq_keys)
+            or (p == "gemini" and self.gemini_keys)
+            or (p == "mistral" and self.mistral_keys)
+        ]
+        providers = [p for p in with_keys if now_m >= self._provider_cooldown.get(p, 0.0)]
+        if not providers:
+            providers = with_keys
 
         last_err: Optional[Exception] = None
         for prov in providers:
@@ -154,6 +173,7 @@ class LLMGateway:
                             messages=messages,
                             tools=tools,
                             models=models,
+                            tier=tier,
                             stream=stream,
                             on_delta=on_delta,
                             temperature=temperature,
@@ -185,6 +205,9 @@ class LLMGateway:
                     )
             except Exception as err:
                 last_err = err
+                err_low = str(err).lower()
+                if any(m in err_low for m in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
+                    self._provider_cooldown[prov] = time.monotonic() + 25.0
                 log_agent("llm_failover", 0.0, "retry", provider=prov, err=type(err).__name__)
                 continue
 
@@ -196,6 +219,7 @@ class LLMGateway:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]],
         models: tuple,
+        tier: int = 1,
         stream: bool,
         on_delta: Optional[Callable[[str], Any]],
         temperature: float,
@@ -205,10 +229,10 @@ class LLMGateway:
         n_keys = len(self.groq_keys)
         last_err: Optional[Exception] = None
 
-        for offset in range(n_keys):
-            k_idx = (self._groq_idx + offset) % n_keys
-            client = self._make_groq_client(self.groq_keys[k_idx])
-            for model in models:
+        for model in models:
+            for offset in range(n_keys):
+                k_idx = (self._groq_idx + offset) % n_keys
+                client = self._make_groq_client(self.groq_keys[k_idx])
                 try:
                     kwargs: Dict[str, Any] = {
                         "model": model,
@@ -216,6 +240,8 @@ class LLMGateway:
                         "temperature": temperature,
                         "max_completion_tokens": max_tokens,
                     }
+                    if tier == 1 and "gpt-oss" in model:
+                        kwargs["reasoning_effort"] = "low"
                     if tools:
                         kwargs["tools"] = tools
                         kwargs["tool_choice"] = "auto"
@@ -246,6 +272,8 @@ class LLMGateway:
                                 await self._emit_delta(on_delta, content)
                             tcs = getattr(delta, "tool_calls", None) or []
                             for tc in tcs:
+                                if first_token_ms == 0.0:
+                                    first_token_ms = (time.perf_counter() - t0) * 1000
                                 idx = int(getattr(tc, "index", 0) or 0)
                                 slot = tc_accum.setdefault(idx, {"id": "", "name": "", "arguments": ""})
                                 if getattr(tc, "id", None):
@@ -291,8 +319,19 @@ class LLMGateway:
                     )
                 except Exception as err:
                     last_err = err
+                    if _is_model_unavailable_error(err):
+                        break  # Try next fallback model without burning remaining keys
                     if _is_rotatable_error(err):
-                        break  # Rotate to next key immediately
+                        continue  # Rotate to next key on this model
+                finally:
+                    close_fn = getattr(client, "close", None)
+                    if callable(close_fn):
+                        try:
+                            closed = close_fn()
+                            if asyncio.iscoroutine(closed) or hasattr(closed, "__await__"):
+                                await closed
+                        except Exception:
+                            pass
         raise RuntimeError(f"Groq pool exhausted: {last_err}")
 
     async def _call_gemini(
@@ -312,87 +351,89 @@ class LLMGateway:
         for offset in range(n_keys):
             k_idx = (self._gemini_idx + offset) % n_keys
             key = self.gemini_keys[k_idx]
+            client = self._make_gemini_client(key)
+            cfg_arg = None
             try:
-                client = self._make_gemini_client(key)
-                cfg_arg = None
-                try:
-                    from google.genai import types
-                    func_decls = []
-                    if tools:
-                        for t in tools:
-                            fn = t.get("function") or {}
-                            func_decls.append(
-                                types.FunctionDeclaration(
-                                    name=fn.get("name", ""),
-                                    description=fn.get("description", ""),
-                                    parameters=fn.get("parameters"),
-                                )
+                from google.genai import types
+                func_decls = []
+                if tools:
+                    for t in tools:
+                        fn = t.get("function") or {}
+                        func_decls.append(
+                            types.FunctionDeclaration(
+                                name=fn.get("name", ""),
+                                description=fn.get("description", ""),
+                                parameters=fn.get("parameters"),
                             )
-                    cfg_kw: Dict[str, Any] = {"temperature": temperature}
-                    if func_decls:
-                        cfg_kw["tools"] = [types.Tool(function_declarations=func_decls)]
-                    cfg_arg = types.GenerateContentConfig(**cfg_kw)
-                except Exception:
-                    cfg_arg = None
-
-                def _invoke():
-                    if cfg_arg is not None:
-                        return client.models.generate_content(
-                            model=self.TIER2_GEMINI_MODELS[0],
-                            contents=prompt_text,
-                            config=cfg_arg,
                         )
-                    return client.models.generate_content(
-                        model=self.TIER2_GEMINI_MODELS[0],
-                        contents=prompt_text,
+                cfg_kw: Dict[str, Any] = {"temperature": temperature}
+                if func_decls:
+                    cfg_kw["tools"] = [types.Tool(function_declarations=func_decls)]
+                cfg_arg = types.GenerateContentConfig(**cfg_kw)
+            except Exception:
+                cfg_arg = None
+
+            for gem_model in self.TIER2_GEMINI_MODELS:
+                try:
+                    def _invoke(m=gem_model):
+                        if cfg_arg is not None:
+                            return client.models.generate_content(
+                                model=m,
+                                contents=prompt_text,
+                                config=cfg_arg,
+                            )
+                        return client.models.generate_content(
+                            model=m,
+                            contents=prompt_text,
+                        )
+
+                    resp = await asyncio.to_thread(_invoke)
+                    first_token_ms = (time.perf_counter() - t0) * 1000
+                    parsed_calls: List[LLMToolCall] = []
+                    text_out = ""
+
+                    cands = getattr(resp, "candidates", None) or []
+                    if cands:
+                        parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
+                        for idx, p in enumerate(parts):
+                            fc = getattr(p, "function_call", None)
+                            if fc and getattr(fc, "name", None):
+                                args = dict(getattr(fc, "args", None) or {})
+                                parsed_calls.append(LLMToolCall(id=f"gem_{idx}", name=fc.name, arguments=args))
+                            elif getattr(p, "text", None):
+                                text_out += p.text
+                    if not text_out and getattr(resp, "text", None):
+                        text_out = resp.text
+
+                    text_out = (text_out or "").strip()
+                    used_json = False
+                    if not parsed_calls and tools and text_out:
+                        clean_txt, fb_calls = _extract_json_tool_calls(text_out)
+                        if fb_calls:
+                            parsed_calls = fb_calls
+                            text_out = clean_txt
+                            used_json = True
+
+                    if stream and text_out and not parsed_calls:
+                        await self._emit_delta(on_delta, text_out)
+
+                    self._gemini_idx = k_idx
+                    return LLMResponse(
+                        text=text_out,
+                        tool_calls=parsed_calls,
+                        provider="gemini",
+                        model=gem_model,
+                        first_token_ms=round(first_token_ms, 2),
+                        total_ms=round((time.perf_counter() - t0) * 1000, 2),
+                        finish_reason="tool_calls" if parsed_calls else "stop",
+                        used_json_fallback=used_json,
                     )
-
-                resp = await asyncio.to_thread(_invoke)
-                first_token_ms = (time.perf_counter() - t0) * 1000
-                parsed_calls: List[LLMToolCall] = []
-                text_out = ""
-
-                # Inspect Gemini function calls if returned in candidates
-                cands = getattr(resp, "candidates", None) or []
-                if cands:
-                    parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
-                    for idx, p in enumerate(parts):
-                        fc = getattr(p, "function_call", None)
-                        if fc and getattr(fc, "name", None):
-                            args = dict(getattr(fc, "args", None) or {})
-                            parsed_calls.append(LLMToolCall(id=f"gem_{idx}", name=fc.name, arguments=args))
-                        elif getattr(p, "text", None):
-                            text_out += p.text
-                if not text_out and getattr(resp, "text", None):
-                    text_out = resp.text
-
-                text_out = (text_out or "").strip()
-                used_json = False
-                if not parsed_calls and tools and text_out:
-                    clean_txt, fb_calls = _extract_json_tool_calls(text_out)
-                    if fb_calls:
-                        parsed_calls = fb_calls
-                        text_out = clean_txt
-                        used_json = True
-
-                if stream and text_out and not parsed_calls:
-                    await self._emit_delta(on_delta, text_out)
-
-                self._gemini_idx = k_idx
-                return LLMResponse(
-                    text=text_out,
-                    tool_calls=parsed_calls,
-                    provider="gemini",
-                    model=self.TIER2_GEMINI_MODELS[0],
-                    first_token_ms=round(first_token_ms, 2),
-                    total_ms=round((time.perf_counter() - t0) * 1000, 2),
-                    finish_reason="tool_calls" if parsed_calls else "stop",
-                    used_json_fallback=used_json,
-                )
-            except Exception as err:
-                last_err = err
-                if _is_rotatable_error(err):
-                    continue
+                except Exception as err:
+                    last_err = err
+                    if _is_model_unavailable_error(err):
+                        continue
+                    if _is_rotatable_error(err):
+                        break
         raise RuntimeError(f"Gemini pool exhausted: {last_err}")
 
     async def _call_mistral(
@@ -502,3 +543,4 @@ class LLMGateway:
                 f'If a tool call is needed and native function calling is unavailable, reply with JSON: {{"tool": "<name>", "arguments": {{...}}}}.'
             )
         return "\n\n".join(lines)
+

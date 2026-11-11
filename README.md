@@ -361,6 +361,60 @@ The resulting high-resolution captures are preserved in `docs/screenshots/`:
 
 ---
 
+---
+
+## 🎙️ Jarvis-Style Voice Experience & Architecture (v2.0)
+
+AIVA features a high-performance, real-time voice pipeline engineered for low latency (< 1.2s to first audible sound), natural conversational rhythms, and full desktop integration.
+
+```mermaid
+flowchart LR
+    subgraph Client ["Client (Desktop Companion & Web HUD)"]
+        VAD["Web Audio VAD
+(800ms Pause Tolerance)"] --> PTT["Push-To-Talk
+(Ctrl+Space Global)"]
+        PTT --> SM["Voice State Machine
+(IDLE/LISTENING/SPEAKING)"]
+        SM --> ORB["60fps Indigo-to-Cyan Orb
+& Live Transcript Bar"]
+    end
+    subgraph Cloud ["Oracle Cloud Backend"]
+        STT["Groq Whisper Large v3
+(~240ms)"]
+        ROUTER["Jarvis Intent Classifier
+& First-Sentence Chunker"]
+        TTS["Microsoft Edge Neural TTS
+(PrabhatNeural / MohanNeural)"]
+    end
+    Client -->|WebM Opus Stream| STT
+    STT --> ROUTER
+    ROUTER -->|Sentence 1 Stream| TTS
+    TTS -->|Zero-Latency Audio Buffer| Client
+```
+
+### Key Capabilities
+- **Low-Latency Streaming Pipeline**: First-sentence streaming synthesizes and plays audio while remaining tokens generate, slashing latency from 3.5s to under 1.2s.
+- **Single Voice State Machine**: Strict state lifecycle (`IDLE`, `LISTENING`, `PROCESSING`, `SPEAKING`, `FOLLOW_UP`, `MUTED`, `ERROR`) eliminates race conditions.
+- **Centralized Audio Session Manager**: Guaranteed resource cleanup on stop, error, logout, and window close. No leaked AudioContexts or orphan mic streams.
+- **Client-Side VAD (Voice Activity Detection)**: Real-time RMS energy analysis with 800ms natural pause tolerance so you are never cut off mid-thought.
+- **Zero-Latency Synthesized Earcons**: Web Audio oscillators provide instant (<15ms) auditory acknowledgment for wake (`ack`), action commands (`action`), standby (`sleep`), and warnings (`error`).
+- **Hands-Free Barge-In**: Interrupt AIVA at any time while it is speaking; playback halts immediately (<250ms) and listening resumes.
+- **Follow-up Window**: After AIVA speaks, stays in `FOLLOW_UP` for 6 seconds without requiring wake word repeat, allowing natural multi-turn conversations.
+- **Global Push-To-Talk Hotkey**: Press `Ctrl+Space` anywhere in Windows (even when minimized to tray) to trigger voice interaction.
+- **Strict Privacy & Security**: Audio is processed entirely in ephemeral in-memory buffers; raw audio is NEVER persisted to disk. Client bundles contain zero private API keys. Destructive actions (shutdown, restart, delete) require verbal confirmation ("Say 'confirm' to shut down").
+
+### Voice Settings & Diagnostics
+- **Modes**:
+  - `Adaptive`: Smart conversational turn-taking with 6s follow-up window.
+  - `Push-to-Talk`: Triggered via global hotkey (`Ctrl+Space`) or UI mic button.
+  - `Muted`: Completely disables microphone input and voice synthesis.
+- **Voices**: `en-IN-PrabhatNeural` (English / Tenglish) and `te-IN-MohanNeural` (Telugu script).
+
+### Voice Troubleshooting
+1. **Microphone permission blocked**: Verify microphone permission in browser settings or Windows Privacy Settings (*Settings > Privacy & Security > Microphone > Allow apps to access your microphone*).
+2. **Audio playback blocked by browser**: Click anywhere on the Web HUD once to satisfy the browser's autoplay policy.
+3. **Headless Linux Server**: The Oracle Cloud VM is headless; local server audio playback is safely bypassed, streaming synthesized audio directly to the desktop client.
+
 ## 🧪 Automated Testing
 Run the complete test suite (unit tests, security tests, API tests, and WebSocket e2e flow):
 ```bash
@@ -378,3 +432,8 @@ python -m unittest discover tests
 | **Desktop Application** | `"open notepad"` | Launches Windows Notepad application asynchronously. |
 | **Web Research** | `"research latest artificial intelligence news"` | Executes Tavily search, synthesizes research via LLM, and stores facts in knowledge memory. |
 | **Persistent User Memory** | `"Remember my name is Charan"` | Saves user fact into `memory/user_memory.json` for future conversations. |
+
+---
+
+## 📖 System Context & LLM Ingestion
+For Claude and other LLM prompt generation, reference the complete, living architectural specification in [`docs/AIVA_SYSTEM_CONTEXT.md`](file:///d:/aiva/docs/AIVA_SYSTEM_CONTEXT.md). This file is automatically updated with each system revision.

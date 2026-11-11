@@ -41,5 +41,13 @@ contextBridge.exposeInMainWorld('aivaAgent', {
   onActivityLog: (callback) => {
     ipcRenderer.removeAllListeners('device:activity');
     ipcRenderer.on('device:activity', (_event, data) => callback(data));
+  },
+  onVoiceTogglePtt: (callback) => {
+    ipcRenderer.removeAllListeners('voice:toggle_ptt');
+    ipcRenderer.on('voice:toggle_ptt', () => callback());
+  },
+  onVoiceWakeWord: (callback) => {
+    ipcRenderer.removeAllListeners('voice:wake_word_triggered');
+    ipcRenderer.on('voice:wake_word_triggered', (_event, data) => callback(data));
   }
 });
