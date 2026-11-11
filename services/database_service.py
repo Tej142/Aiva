@@ -211,6 +211,24 @@ class DatabaseService:
         );
         CREATE INDEX IF NOT EXISTS idx_whatsapp_events_user ON whatsapp_events(user_id);
         CREATE INDEX IF NOT EXISTS idx_whatsapp_events_created ON whatsapp_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS agent_telemetry (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            tier INTEGER NOT NULL,
+            channel TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            route_ms REAL DEFAULT 0.0,
+            llm_first_token_ms REAL DEFAULT 0.0,
+            tool_time_ms REAL DEFAULT 0.0,
+            total_ms REAL DEFAULT 0.0,
+            tts_first_audio_ms REAL DEFAULT 0.0,
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            success INTEGER NOT NULL DEFAULT 1,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_telemetry_user ON agent_telemetry(user_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_telemetry_created ON agent_telemetry(created_at);
         """)
         conn.commit()
 
@@ -271,6 +289,24 @@ class DatabaseService:
         );
         CREATE INDEX IF NOT EXISTS idx_whatsapp_events_user ON whatsapp_events(user_id);
         CREATE INDEX IF NOT EXISTS idx_whatsapp_events_created ON whatsapp_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS agent_telemetry (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            tier INTEGER NOT NULL,
+            channel TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            route_ms REAL DEFAULT 0.0,
+            llm_first_token_ms REAL DEFAULT 0.0,
+            tool_time_ms REAL DEFAULT 0.0,
+            total_ms REAL DEFAULT 0.0,
+            tts_first_audio_ms REAL DEFAULT 0.0,
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            success INTEGER NOT NULL DEFAULT 1,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_telemetry_user ON agent_telemetry(user_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_telemetry_created ON agent_telemetry(created_at);
         """)
 
         conn.commit()
@@ -929,3 +965,73 @@ class DatabaseService:
         )
         conn.commit()
         return True
+
+    def record_agent_telemetry(
+        self,
+        telemetry_id: str,
+        user_id: Optional[str],
+        tier: int,
+        channel: str,
+        tag: str,
+        route_ms: float = 0.0,
+        llm_first_token_ms: float = 0.0,
+        tool_time_ms: float = 0.0,
+        total_ms: float = 0.0,
+        tts_first_audio_ms: float = 0.0,
+        tools: Optional[List[str]] = None,
+        success: bool = True,
+    ) -> bool:
+        """Store non-PII agent latency/tier aggregate event."""
+        conn = self.get_connection()
+        now = time.time()
+        conn.execute(
+            """INSERT INTO agent_telemetry
+               (id, user_id, tier, channel, tag, route_ms, llm_first_token_ms,
+                tool_time_ms, total_ms, tts_first_audio_ms, tools_json, success, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                telemetry_id,
+                user_id,
+                int(tier),
+                str(channel or "hud"),
+                str(tag or "conversation"),
+                float(route_ms or 0.0),
+                float(llm_first_token_ms or 0.0),
+                float(tool_time_ms or 0.0),
+                float(total_ms or 0.0),
+                float(tts_first_audio_ms or 0.0),
+                json.dumps(list(tools or [])),
+                1 if success else 0,
+                now,
+            ),
+        )
+        conn.commit()
+        return True
+
+    def get_agent_telemetry_rows(
+        self,
+        user_id: Optional[str] = None,
+        since: float = 0.0,
+        limit: int = 2000,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve non-PII telemetry aggregates scoped by user_id when provided."""
+        conn = self.get_connection()
+        if user_id:
+            rows = conn.execute(
+                """SELECT tier, channel, tag, route_ms, llm_first_token_ms, tool_time_ms,
+                          total_ms, tts_first_audio_ms, tools_json, success, created_at
+                   FROM agent_telemetry
+                   WHERE user_id = ? AND created_at >= ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (user_id, float(since), int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT tier, channel, tag, route_ms, llm_first_token_ms, tool_time_ms,
+                          total_ms, tts_first_audio_ms, tools_json, success, created_at
+                   FROM agent_telemetry
+                   WHERE created_at >= ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (float(since), int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
