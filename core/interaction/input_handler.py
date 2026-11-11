@@ -1,3 +1,8 @@
+"""Unified interaction pipeline routing user turns across MemoryEngine, LLM, and Planner."""
+
+from typing import Callable, Optional
+
+
 class InputHandler:
 
     def __init__(
@@ -5,194 +10,240 @@ class InputHandler:
         event_bus,
         intent_router_service,
         conversation_service,
-        conversation_memory_service,
-        context_resolver_service,
-        user_memory_service,
-        memory_extraction_service,
-        passive_memory_service=None
+        memory_engine,
+        context_resolver_service=None,
+        get_active_user_id: Optional[Callable[[], Optional[str]]] = None,
     ):
-
         self.event_bus = event_bus
         self.intent_router_service = intent_router_service
         self.conversation_service = conversation_service
-        self.conversation_memory_service = conversation_memory_service
+        self.memory_engine = memory_engine
         self.context_resolver_service = context_resolver_service
-        self.user_memory_service = user_memory_service
-        self.memory_extraction_service = memory_extraction_service
-        self.passive_memory_service = passive_memory_service
-        self.pending_memory = None
+        self.get_active_user_id = get_active_user_id
+        self.voice_service = None
+        self.pending_confirmation = None
 
+    def _resolve_uid(self, user_id: Optional[str]) -> Optional[str]:
+        if user_id:
+            return user_id
+        if self.get_active_user_id:
+            return self.get_active_user_id()
+        return None
 
     async def process_query(
         self,
-        user_input,
-        speak=True
+        user_input: str,
+        speak: bool = True,
+        user_id: Optional[str] = None,
+        channel: str = "voice",
+        session_id: str = "default",
     ):
-        user_input = user_input.strip()
+        user_input = (user_input or "").strip()
+        uid = self._resolve_uid(user_id)
 
         if not user_input:
             return {
                 "response": "",
                 "should_continue": True,
                 "should_end_session": False,
-                "route": "empty"
+                "route": "empty",
             }
 
-        if user_input.lower() in {
-            "exit",
-            "quit",
-            "close aiva"
-        }:
+        if user_input.lower() in {"exit", "quit", "close aiva"}:
             return {
                 "response": "Goodbye! Have a great day.",
                 "should_continue": False,
                 "should_end_session": True,
-                "route": "exit"
+                "route": "exit",
             }
 
         # =====================================
-        # COMPLETE PENDING MEMORY
+        # VOICE CONFIRMATION FOR DESTRUCTIVE ACTIONS
         # =====================================
-        if self.pending_memory:
-            key = self.pending_memory["key"]
-            value = user_input.strip().rstrip(".!?")
-
-            if not value:
-                answer = "I didn't catch that. Could you tell me again?"
+        if self.pending_confirmation:
+            action_info = self.pending_confirmation
+            self.pending_confirmation = None
+            clean_in = user_input.lower().strip().rstrip(".!?")
+            if clean_in in ("confirm", "yes confirm", "proceed", "yes proceed", "yes do it", "do it"):
+                answer = f"Confirmed. Executing {action_info['label']} now."
+                if speak and self.voice_service:
+                    await self.voice_service.speak(answer)
+                if self.memory_engine and uid:
+                    self.memory_engine.observe(uid, {"user": user_input, "assistant": answer, "channel": channel}, channel=channel, session_id=session_id)
+                await self.event_bus.emit(
+                    {
+                        "type": "goal.created",
+                        "data": {
+                            "goal": action_info["original_query"],
+                            "intent": "device_action",
+                            "user_id": uid,
+                            "channel": channel,
+                        },
+                    }
+                )
                 return {
                     "response": answer,
                     "should_continue": True,
                     "should_end_session": False,
-                    "route": "memory_write"
+                    "route": "task",
                 }
-
-            self.user_memory_service.remember(key, value)
-            self.pending_memory = None
-            answer = self._build_memory_answer(key, value)
-            self.conversation_memory_service.add_turn(user_input, answer)
+            answer = "Action cancelled. Standing by."
+            if speak and self.voice_service:
+                await self.voice_service.speak(answer)
+            if self.memory_engine and uid:
+                self.memory_engine.observe(uid, {"user": user_input, "assistant": answer, "channel": channel}, channel=channel, session_id=session_id)
             return {
                 "response": answer,
                 "should_continue": True,
                 "should_end_session": False,
-                "route": "memory_write"
+                "route": "conversation",
             }
+
+        # Check destructive workstation command confirmation
+        lower_in = user_input.lower().strip()
+        destructive_keywords = ["shutdown", "shut down", "restart my pc", "reboot my pc", "delete all"]
+        if any(dk in lower_in for dk in destructive_keywords):
+            label = "shut down" if "shut" in lower_in else ("restart" if "re" in lower_in else "destructive operation")
+            self.pending_confirmation = {
+                "action": "destructive",
+                "label": label,
+                "original_query": user_input,
+            }
+            answer = f"This will {label} your workstation. Say 'confirm' to proceed."
+            if speak and self.voice_service:
+                await self.voice_service.speak(answer)
+            if self.memory_engine and uid:
+                self.memory_engine.observe(uid, {"user": user_input, "assistant": answer, "channel": channel}, channel=channel, session_id=session_id)
+            return {
+                "response": answer,
+                "should_continue": True,
+                "should_end_session": False,
+                "expect_followup": True,
+                "followup_timeout": 8.0,
+                "route": "confirmation_required",
+            }
+
+        # =====================================
+        # PENDING MEMORY CONFIRMATION / DUE TIME
+        # =====================================
+        if self.memory_engine and uid:
+            if self.memory_engine.has_pending_confirmation(uid):
+                res = self.memory_engine.handle_memory_intent(uid, user_input, channel=channel)
+                answer = res["response"]
+                if speak and self.voice_service:
+                    await self.voice_service.speak(answer)
+                return {
+                    "response": answer,
+                    "should_continue": True,
+                    "should_end_session": False,
+                    "route": "memory",
+                }
+            resolved_time_reply = self.memory_engine.extractor.try_resolve_pending_commitment_time(
+                uid, user_input, channel=channel
+            )
+            if resolved_time_reply:
+                if speak and self.voice_service:
+                    await self.voice_service.speak(resolved_time_reply)
+                return {
+                    "response": resolved_time_reply,
+                    "should_continue": True,
+                    "should_end_session": False,
+                    "route": "memory",
+                }
 
         # =====================================
         # ROUTE INPUT
         # =====================================
-        recent_context = self.conversation_memory_service.get_history(limit=3)
-        route_result = await self.intent_router_service.route(
-            user_input,
-            recent_context
+        recent_context = (
+            self.memory_engine.get_working_messages(uid, session_id=session_id, limit=4)
+            if self.memory_engine and uid
+            else []
         )
-
+        route_result = await self.intent_router_service.route(user_input, recent_context)
         route = route_result.get("route", "conversation")
         subtype = route_result.get("subtype")
-        source = route_result.get("source")
-
-        print(f"[InputHandler] Route: {route}")
-        print(f"[InputHandler] Intent: {subtype}")
-        print(f"[InputHandler] Router: {source}")
 
         # =====================================
         # SESSION CLOSE / DISMISSAL
         # =====================================
         if route == "session_close":
-            name = "Charan"
-            try:
-                name = self.user_memory_service.get("name") or "Charan"
-            except Exception:
-                pass
+            name = (self.memory_engine.get_user_display_name(uid) if self.memory_engine else None) or "there"
             clean_in = user_input.lower().strip().rstrip("!?.,")
-            if any(w in clean_in for w in ["thank", "thx"]):
+            if any(w in clean_in for w in ("thank", "thx")):
                 answer = f"You're very welcome, {name}! Call me whenever you need anything."
-            elif any(w in clean_in for w in ["sleep", "standby"]):
+            elif any(w in clean_in for w in ("sleep", "standby")):
                 answer = f"Going to standby now, {name}. Say 'Hey AIVA' whenever you need me."
-            elif any(w in clean_in for w in ["bye", "goodbye", "goodnight", "night"]):
+            elif any(w in clean_in for w in ("bye", "goodbye", "goodnight", "night")):
                 answer = f"Talk to you soon, {name}! Have a wonderful time."
             else:
                 answer = f"Got it, {name}! Going to standby."
 
-            if speak and hasattr(self, 'voice_service') and self.voice_service:
+            if speak and self.voice_service:
                 await self.voice_service.speak(answer)
-
-            self.conversation_memory_service.add_turn(user_input, answer)
+            if self.memory_engine and uid:
+                self.memory_engine.observe(uid, {"user": user_input, "assistant": answer, "channel": channel}, channel=channel, session_id=session_id)
             return {
                 "response": answer,
                 "should_continue": False,
                 "should_end_session": True,
                 "expect_followup": False,
                 "followup_timeout": 0.0,
-                "route": "session_close"
+                "route": "session_close",
             }
 
         # =====================================
-        # PERSISTENT MEMORY WRITE
+        # MEMORY INTENT (RECALL / REMEMBER / FORGET / REMINDERS)
         # =====================================
-        if route == "memory_write":
-            extracted = self.memory_extraction_service.extract(user_input)
-
-            if not extracted:
-                answer = "I understand that you want me to remember something, but what exactly should I remember?"
-                self.conversation_memory_service.add_turn(user_input, answer)
-                if speak and hasattr(self, 'voice_service') and self.voice_service:
-                    await self.voice_service.speak(answer)
-                return {
-                    "response": answer,
-                    "should_continue": True,
-                    "should_end_session": False,
-                    "expect_followup": True,
-                    "followup_timeout": 9.0,
-                    "route": "memory_write"
-                }
-
-            status = extracted.get("status")
-
-            if status == "incomplete":
-                self.pending_memory = {"key": extracted["key"]}
-                answer = extracted["question"]
-                self.conversation_memory_service.add_turn(user_input, answer)
-                if speak and hasattr(self, 'voice_service') and self.voice_service:
-                    await self.voice_service.speak(answer)
-                return {
-                    "response": answer,
-                    "should_continue": True,
-                    "should_end_session": False,
-                    "expect_followup": True,
-                    "followup_timeout": 10.0,
-                    "route": "memory_write"
-                }
-
-            key = extracted["key"]
-            value = extracted["value"]
-            self.user_memory_service.remember(key, value)
-            answer = self._build_memory_answer(key, value)
-            self.conversation_memory_service.add_turn(user_input, answer)
-            if speak and hasattr(self, 'voice_service') and self.voice_service:
+        if route in ("memory", "memory_write", "memory_read") and self.memory_engine:
+            res = self.memory_engine.handle_memory_intent(uid, user_input, channel=channel)
+            answer = res.get("response", "Done.")
+            if speak and self.voice_service:
                 await self.voice_service.speak(answer)
+            # Record non-sensitive conversational trace only when appropriate
+            if uid and not res.get("confirmation_required"):
+                self.memory_engine.observe(
+                    uid,
+                    {"user": user_input, "assistant": answer, "channel": channel},
+                    channel=channel,
+                    session_id=session_id,
+                )
             return {
                 "response": answer,
                 "should_continue": True,
                 "should_end_session": False,
-                "expect_followup": True,
-                "followup_timeout": 6.0,
-                "route": "memory_write"
+                "expect_followup": bool(res.get("needs_due_time") or res.get("confirmation_required")),
+                "followup_timeout": 9.0,
+                "route": "memory",
             }
 
         # =====================================
-        # BUILD CONTEXT & HISTORY
+        # BEFORE LLM: FAST FENCED MEMORY CONTEXT + WORKING HISTORY
         # =====================================
-        history = self.conversation_memory_service.get_history(limit=6)
-        model_history = []
-        for turn in history:
-            user_message = turn.get("user")
-            aiva_message = turn.get("aiva")
-            if user_message:
-                model_history.append({"role": "user", "content": user_message})
-            if aiva_message:
-                model_history.append({"role": "assistant", "content": aiva_message})
-
-        user_context = self.user_memory_service.build_context()
+        raw_display_name = (
+            self.memory_engine.get_user_display_name(uid)
+            if self.memory_engine and uid and hasattr(self.memory_engine, "get_user_display_name")
+            else None
+        )
+        display_name = (
+            raw_display_name.strip()
+            if isinstance(raw_display_name, str) and raw_display_name.strip()
+            else None
+        )
+        model_history = (
+            self.memory_engine.get_working_messages(uid, session_id=session_id, limit=6)
+            if self.memory_engine and uid
+            else []
+        )
+        user_context = (
+            self.memory_engine.build_context(
+                uid,
+                user_input,
+                channel=channel,
+                authoritative_name=display_name,
+            )
+            if self.memory_engine and uid
+            else ""
+        )
 
         # =====================================
         # CONVERSATION
@@ -201,65 +252,74 @@ class InputHandler:
             answer = await self.conversation_service.respond(
                 user_input,
                 model_history,
-                user_context
+                user_context,
+                user_name=display_name,
+                user_id=uid,
+                channel=channel,
             )
 
-            if speak and hasattr(self, 'voice_service') and self.voice_service:
+            if self.memory_engine and uid:
+                # Non-blocking observe + one-time due-time nudge if commitment lacks time
+                self.memory_engine.observe(
+                    uid,
+                    {"user": user_input, "assistant": answer, "channel": channel},
+                    channel=channel,
+                    session_id=session_id,
+                )
+                due_q = self.memory_engine.extractor.get_pending_commitment_question(uid)
+                if due_q and due_q not in answer:
+                    answer = f"{answer} {due_q}"
+
+            if speak and self.voice_service:
                 await self.voice_service.speak(answer)
 
-            self.conversation_memory_service.add_turn(user_input, answer)
-
-            # Silently learn any facts the user revealed — fire and forget
-            if self.passive_memory_service:
-                try:
-                    import asyncio as _aio
-                    _aio.ensure_future(
-                        self.passive_memory_service.extract_and_save_async(user_input)
-                    )
-                except RuntimeError:
-                    pass  # no running loop in test context — safe to skip
-
-            # Did AIVA ask a question or is it an interactive conversational dialogue?
             ends_with_q = answer.strip().endswith("?")
-            followup_timeout = 10.0 if ends_with_q else 7.0
-
             return {
                 "response": answer,
                 "should_continue": True,
                 "should_end_session": False,
                 "expect_followup": True,
-                "followup_timeout": followup_timeout,
-                "route": "conversation"
+                "followup_timeout": 10.0 if ends_with_q else 7.0,
+                "route": "conversation",
             }
 
         # =====================================
-        # TASK
+        # TASK / WORKFLOW EXECUTION
         # =====================================
-
-        # For web automation tasks, give a concise, specific acknowledgement
         if subtype == "web_automation":
-            task_ack = (
-                "Connecting directly to the portal to fetch your results now."
-            )
+            task_ack = "Connecting directly to the portal to fetch your results now."
         else:
             task_ack = await self.conversation_service.respond(
                 user_input,
                 model_history,
-                user_context
+                user_context,
+                user_name=display_name,
+                user_id=uid,
+                channel=channel,
             )
 
-        if speak and hasattr(self, 'voice_service') and self.voice_service:
+        if speak and self.voice_service:
             await self.voice_service.speak(task_ack)
 
-        self.conversation_memory_service.add_turn(user_input, task_ack)
+        if self.memory_engine and uid:
+            self.memory_engine.observe(
+                uid,
+                {"user": user_input, "assistant": task_ack, "channel": channel},
+                channel=channel,
+                session_id=session_id,
+            )
 
-        await self.event_bus.emit({
-            "type": "goal.created",
-            "data": {
-                "goal": user_input,
-                "intent": subtype
+        await self.event_bus.emit(
+            {
+                "type": "goal.created",
+                "data": {
+                    "goal": user_input,
+                    "intent": subtype,
+                    "user_id": uid,
+                    "channel": channel,
+                },
             }
-        })
+        )
 
         return {
             "response": task_ack,
@@ -267,44 +327,29 @@ class InputHandler:
             "should_end_session": False,
             "expect_followup": True,
             "followup_timeout": 30.0 if subtype == "web_automation" else 6.5,
-            "route": "task"
+            "route": "task",
         }
 
     async def process_input(
         self,
-        user_input
+        user_input: str,
+        user_id: Optional[str] = None,
+        channel: str = "voice",
+        speak: bool = True,
     ):
-        result = await self.process_query(user_input, speak=True)
+        result = await self.process_query(
+            user_input,
+            speak=speak,
+            user_id=user_id,
+            channel=channel,
+        )
         answer = result.get("response", "")
         if answer:
             try:
                 print(f"\nAIVA: {answer}\n")
             except UnicodeEncodeError:
                 import sys
-                sys.stdout.buffer.write(f"\nAIVA: {answer}\n\n".encode('utf-8'))
+
+                sys.stdout.buffer.write(f"\nAIVA: {answer}\n\n".encode("utf-8"))
                 sys.stdout.buffer.flush()
-
         return result.get("should_continue", True)
-
-    # =====================================
-    # MEMORY RESPONSE BUILDER
-    # =====================================
-
-    def _build_memory_answer(self, key, value):
-        """Warm, friend-like acknowledgement when saving a user fact."""
-        name = self.user_memory_service.get("name", "")
-        name_suffix = f", {name}" if name and key != "name" else ""
-
-        responses = {
-            "name":       f"Nice to officially know your name{name_suffix}! I'll remember that.",
-            "likes":      f"Got it{name_suffix} — noted that you like {value}.",
-            "dislikes":   f"Noted{name_suffix}, I'll remember you're not into {value}.",
-            "preference": f"Alright{name_suffix}, I'll keep that preference in mind.",
-            "mood":       f"Noted. I'll remember how you're feeling.",
-            "age":        f"Got it{name_suffix}, noted that down.",
-            "location":   f"Cool{name_suffix}, I'll remember you're from {value}.",
-            "profession": f"Nice{name_suffix}, noted that you're a {value}.",
-            "goal":       f"Alright{name_suffix}, I'll keep that in mind.",
-        }
-
-        return responses.get(key, f"Got it{name_suffix}, I'll remember: {value}.")

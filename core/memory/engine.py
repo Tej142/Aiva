@@ -115,15 +115,22 @@ class MemoryEngine:
         query: str,
         channel: str = Channel.HUD.value,
         embedding_timeout_s: Optional[float] = None,
+        authoritative_name: Optional[str] = None,
     ) -> str:
         """Build `<memory>` fenced context block quickly for prompt injection."""
         if not user_id:
             return ""
+        auth_name = (
+            authoritative_name
+            if authoritative_name is not None
+            else self.get_user_display_name(user_id)
+        )
         return self.injector.build_context(
             user_id=user_id,
             query=query,
             channel=channel,
             embedding_timeout_s=embedding_timeout_s,
+            authoritative_name=auth_name,
         )
 
     def observe(
