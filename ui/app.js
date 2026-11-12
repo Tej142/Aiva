@@ -192,11 +192,15 @@ function authHeaders() {
 }
 
 function onAuthSuccess(user) {
+    window._aivaCurrentUser = user;
     const overlay = document.getElementById('web-auth-overlay');
     if (overlay) overlay.style.display = 'none';
 
     const logoutBtn = document.getElementById('btn-web-logout');
     if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+
+    const navAdmin = document.getElementById('nav-admin');
+    if (navAdmin) navAdmin.style.display = user && user.is_admin ? 'flex' : 'none';
 
     const userNameDisplay = document.getElementById('user-display-name');
     if (userNameDisplay) {
@@ -209,12 +213,24 @@ function onAuthSuccess(user) {
         userAvatarInitials.textContent = initial;
     }
 
-    // Load fresh data for this authenticated user
+    // Keep HUD WebSocket open even when gated so live verification unlock works
+    connectHudWebSocket();
+
+    const gateState = (user && user.gate_state) || 'active';
+    if (gateState !== 'active') {
+        if (typeof showWaGateOverlay === 'function') showWaGateOverlay(user);
+        loadWhatsAppStatus();
+        return;
+    }
+    if (typeof hideWaGateOverlay === 'function') hideWaGateOverlay();
+
+    // Load fresh data for this active authenticated user
     loadMemoryData();
     loadConversationHistory();
-    connectHudWebSocket();
     loadWhatsAppStatus();
     startWhatsAppStatusPolling();
+    if (typeof loadWhatsAppInboxSummary === 'function') loadWhatsAppInboxSummary();
+    if (user && user.is_admin && typeof loadAdminPanel === 'function') loadAdminPanel();
 }
 
 function showWebAuthModal() {
@@ -553,6 +569,10 @@ function initNavigation() {
                 loadWhatsAppStatus();
                 loadWhatsAppContacts();
                 loadWhatsAppMessages();
+                if (typeof loadWhatsAppInboxSummary === 'function') loadWhatsAppInboxSummary();
+            }
+            if (targetTab === 'admin-view' && typeof loadAdminPanel === 'function') {
+                loadAdminPanel();
             }
         });
     });
@@ -1730,6 +1750,21 @@ function connectHudWebSocket() {
             try {
                 const payload = JSON.parse(event.data);
                 if (payload.type === 'connected') return;
+                if (payload.type === 'verification_unlocked' || (payload.type === 'gate_state_updated' && payload.gate_state === 'active')) {
+                    if (typeof hideWaGateOverlay === 'function') hideWaGateOverlay();
+                    showHudToast('WhatsApp verification complete. AIVA unlocked.');
+                    try {
+                        if (window.parent && window.parent !== window) {
+                            window.parent.postMessage({ type: 'AIVA_VERIFICATION_UNLOCKED' }, '*');
+                        }
+                    } catch {}
+                    checkAuthStatus();
+                    return;
+                }
+                if (payload.type === 'gate_state_updated' && payload.gate_state && payload.gate_state !== 'active') {
+                    checkAuthStatus();
+                    return;
+                }
                 if (payload.type === 'memory_notification' || payload.type === 'reminder' || payload.type === 'morning_briefing' || payload.type === 'workflow_result') {
                     const text = payload.text || 'Proactive update';
                     const speechText = payload.speech_text || text;
@@ -2312,7 +2347,14 @@ async function loadWhatsAppStatus() {
         const isConnected = Boolean(bridge.connected);
 
         updateGlobalWhatsAppStatusUi(bridge);
+        const pairingPanel = document.getElementById('wa-pairing-panel');
+        if (pairingPanel) {
+            pairingPanel.style.display = data.is_owner ? 'block' : 'none';
+        }
         renderPairingState(pairing, isConnected, data.is_owner);
+        if (typeof renderWaGateFromStatus === 'function') {
+            renderWaGateFromStatus(data);
+        }
 
         if (badge) {
             if (isConnected) {
@@ -2343,12 +2385,30 @@ async function loadWhatsAppStatus() {
             const errorHtml = (!isConnected && bridge.error)
                 ? `<div class="wa-error-alert">${escapeWaHtml(bridge.error)}</div>`
                 : '';
+            const sessionInfo = data.session || {};
+            const sessionState = sessionInfo.session_state || 'UNLINKED';
             details.innerHTML = `
                 <div><strong>Bridge Status:</strong> ${escapeWaHtml(bridge.status || 'offline')}</div>
                 <div><strong>AIVA Device Phone:</strong> ${escapeWaHtml(pairedPhone)}</div>
                 <div><strong>Authorized Phone Links:</strong> ${data.links?.length || 0} active</div>
                 ${errorHtml}
+                <div class="wa-session-bar">
+                    <div class="wa-session-meta">
+                        <span>Session:</span>
+                        <span class="wa-phase-badge ${sessionState === 'ACTIVE' ? 'active' : ''}" id="wa-session-state-pill">${escapeWaHtml(sessionState)}</span>
+                    </div>
+                    <div class="wa-session-actions">
+                        <button type="button" class="wa-btn wa-btn-secondary" id="wa-btn-test-conn">Test</button>
+                        <button type="button" class="wa-btn wa-btn-danger" id="wa-btn-end-session" ${sessionState === 'ACTIVE' ? '' : 'disabled'}>End Session</button>
+                    </div>
+                </div>
             `;
+            if (typeof bindWhatsAppSessionButtons === 'function') {
+                bindWhatsAppSessionButtons();
+            }
+        }
+        if (typeof renderWhatsAppInboxSummaryData === 'function' && data.inbox_summary) {
+            renderWhatsAppInboxSummaryData(data.inbox_summary);
         }
 
         if (activeLinksContainer) {
@@ -2445,10 +2505,18 @@ async function loadWhatsAppContacts() {
                     <div><strong>${escapeWaHtml(c.display_name)}</strong> <span style="color:var(--text-2); margin-left:6px;">+${escapeWaHtml(c.phone_e164)}</span></div>
                     <div style="margin-top:2px;">${aliasesHtml}</div>
                 </div>
-                <div style="display:flex; align-items:center; gap:12px;">
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
                     <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.75rem; color:var(--text-2);" title="Send messages without confirmation prompt">
                         <input type="checkbox" class="wa-toggle-trusted" data-id="${escapeWaHtml(c.id)}" ${c.trusted ? 'checked' : ''}>
                         <span>Trusted</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.75rem; color:var(--text-2);" title="Notify when this contact sends an inbound WhatsApp message">
+                        <input type="checkbox" class="wa-toggle-notify" data-id="${escapeWaHtml(c.id)}" ${c.notify_inbound !== false ? 'checked' : ''}>
+                        <span>Notify</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.75rem; color:var(--text-2);" title="Priority contacts bypass quiet hours">
+                        <input type="checkbox" class="wa-toggle-priority" data-id="${escapeWaHtml(c.id)}" ${c.priority ? 'checked' : ''}>
+                        <span>Priority</span>
                     </label>
                     <button class="wa-btn-del-contact" data-id="${escapeWaHtml(c.id)}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:0.9rem;" title="Delete Contact">✕</button>
                 </div>
@@ -2585,3 +2653,509 @@ async function loadWhatsAppMessages() {
         console.warn('Error loading WhatsApp messages:', e);
     }
 }
+
+// ---------------------------------------------------------------------
+// 11. WhatsApp Verification Gate, Session Controls, Inbox Summary & Admin Panel
+// ---------------------------------------------------------------------
+function showWaGateOverlay(user) {
+    const overlay = document.getElementById('wa-gate-overlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+
+    const gateState = (user && user.gate_state) || 'number_pending';
+    const title = document.getElementById('wa-gate-title');
+    const subtitle = document.getElementById('wa-gate-subtitle');
+    const banner = document.getElementById('wa-gate-status-banner');
+    const formBox = document.getElementById('wa-gate-form-box');
+    const codePanel = document.getElementById('wa-gate-code-panel');
+
+    if (banner) {
+        banner.style.display = 'none';
+        banner.className = 'wa-gate-banner';
+        banner.textContent = '';
+    }
+
+    if (gateState === 'approval_pending') {
+        if (title) title.textContent = 'Account Pending Approval';
+        if (subtitle) subtitle.textContent = 'Your WhatsApp number is verified and awaiting owner approval.';
+        if (banner) {
+            banner.style.display = 'block';
+            banner.className = 'wa-gate-banner info';
+            banner.textContent = 'Pending owner approval. This screen unlocks automatically as soon as you are approved.';
+        }
+        if (formBox) formBox.style.display = 'none';
+        if (codePanel) codePanel.style.display = 'none';
+    } else if (gateState === 'credential_pending') {
+        if (title) title.textContent = 'Complete WhatsApp Credential Check';
+        if (subtitle) subtitle.textContent = 'Reply in your WhatsApp chat with AIVA to enter your access username and password.';
+        if (banner) {
+            banner.style.display = 'block';
+            banner.className = 'wa-gate-banner info';
+            banner.textContent = 'Code verified. Reply in WhatsApp to finish access verification; this HUD unlocks automatically.';
+        }
+        if (formBox) formBox.style.display = 'block';
+    } else if (gateState === 'blocked' || gateState === 'revoked') {
+        if (title) title.textContent = 'Access Suspended';
+        if (subtitle) subtitle.textContent = 'This account has been blocked or revoked by an administrator.';
+        if (banner) {
+            banner.style.display = 'block';
+            banner.className = 'wa-gate-banner error';
+            banner.textContent = `Access state: ${gateState}. Contact the workspace owner if needed.`;
+        }
+        if (formBox) formBox.style.display = 'none';
+        if (codePanel) codePanel.style.display = 'none';
+    } else {
+        if (title) title.textContent = 'WhatsApp Verification Required';
+        if (subtitle) subtitle.textContent = 'Link and verify your personal WhatsApp number to unlock AIVA.';
+        if (formBox) formBox.style.display = 'block';
+    }
+}
+
+function hideWaGateOverlay() {
+    const overlay = document.getElementById('wa-gate-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function renderWaGateFromStatus(data) {
+    if (!data || (data.gate_state && data.gate_state === 'active')) return;
+    const codePanel = document.getElementById('wa-gate-code-panel');
+    const codeVal = document.getElementById('gate-code-value');
+    const waMeBtn = document.getElementById('gate-wa-me-btn');
+    const outboundBox = document.getElementById('gate-outbound-box');
+    const instr = document.getElementById('gate-code-instructions');
+
+    if (data.pending_code && codePanel && codeVal) {
+        codeVal.textContent = data.pending_code;
+        codePanel.style.display = 'block';
+        const aivaNum = (data.bridge && data.bridge.aiva_number) || '';
+        if (waMeBtn) {
+            if (aivaNum) {
+                waMeBtn.href = `https://wa.me/${encodeURIComponent(aivaNum)}?text=${encodeURIComponent(data.pending_code)}`;
+                waMeBtn.style.display = 'inline-flex';
+            } else {
+                waMeBtn.style.display = 'none';
+            }
+        }
+        if (outboundBox) {
+            outboundBox.style.display = data.verify_mode === 'outbound' ? 'block' : 'none';
+        }
+        if (instr) {
+            instr.textContent = data.verify_mode === 'outbound'
+                ? 'Enter the 6-digit verification code sent to your WhatsApp or reply on WhatsApp.'
+                : 'Click "Send on WhatsApp" (or message AIVA manually) from your personal number with this exact code.';
+        }
+    }
+}
+
+function initWaGateOverlay() {
+    const btnStart = document.getElementById('gate-btn-start');
+    const phoneInput = document.getElementById('gate-phone-input');
+    const btnCheck = document.getElementById('gate-btn-check');
+    const btnOutbound = document.getElementById('gate-btn-verify-outbound');
+    const outboundInput = document.getElementById('gate-outbound-code');
+    const btnLogout = document.getElementById('gate-btn-logout');
+    const banner = document.getElementById('wa-gate-status-banner');
+
+    function setGateBanner(msg, kind = 'info') {
+        if (!banner) return;
+        banner.style.display = msg ? 'block' : 'none';
+        banner.className = `wa-gate-banner ${kind}`;
+        banner.textContent = msg || '';
+    }
+
+    if (btnStart && phoneInput) {
+        btnStart.addEventListener('click', async () => {
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                setGateBanner('Enter your personal phone number with country code.', 'error');
+                return;
+            }
+            btnStart.disabled = true;
+            setGateBanner('');
+            try {
+                const res = await fetch('/api/whatsapp/link/start', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ phone }),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok || body.status !== 'success') {
+                    setGateBanner(body.message || 'Unable to start verification.', 'error');
+                    return;
+                }
+                const d = body.data || {};
+                const codePanel = document.getElementById('wa-gate-code-panel');
+                const codeVal = document.getElementById('gate-code-value');
+                const waMeBtn = document.getElementById('gate-wa-me-btn');
+                const outboundBox = document.getElementById('gate-outbound-box');
+                const instr = document.getElementById('gate-code-instructions');
+                if (codePanel) codePanel.style.display = 'block';
+                if (codeVal) codeVal.textContent = d.link_code || '------';
+                if (instr && d.instructions) instr.textContent = d.instructions;
+                if (waMeBtn) {
+                    if (d.wa_me_url) {
+                        waMeBtn.href = d.wa_me_url;
+                        waMeBtn.style.display = 'inline-flex';
+                    } else {
+                        waMeBtn.style.display = 'none';
+                    }
+                }
+                if (outboundBox) {
+                    outboundBox.style.display = d.verify_mode === 'outbound' ? 'block' : 'none';
+                }
+                setGateBanner(d.verify_mode === 'outbound'
+                    ? 'Verification code sent to your WhatsApp number.'
+                    : 'Code ready. Send it on WhatsApp from your personal number.', 'info');
+            } catch {
+                setGateBanner('Network error starting verification.', 'error');
+            } finally {
+                btnStart.disabled = false;
+            }
+        });
+    }
+
+    if (btnOutbound && outboundInput) {
+        btnOutbound.addEventListener('click', async () => {
+            const code = outboundInput.value.trim();
+            if (!code) {
+                setGateBanner('Enter the verification code sent to your WhatsApp.', 'error');
+                return;
+            }
+            btnOutbound.disabled = true;
+            try {
+                const res = await fetch('/api/whatsapp/link/verify-outbound', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ code }),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok || body.status !== 'success') {
+                    setGateBanner(body.message || 'Invalid verification code.', 'error');
+                    return;
+                }
+                setGateBanner(body.message || 'Verified.', 'info');
+                checkAuthStatus();
+            } catch {
+                setGateBanner('Network error verifying code.', 'error');
+            } finally {
+                btnOutbound.disabled = false;
+            }
+        });
+    }
+
+    if (btnCheck) {
+        btnCheck.addEventListener('click', async () => {
+            btnCheck.disabled = true;
+            try {
+                await checkAuthStatus();
+            } finally {
+                btnCheck.disabled = false;
+            }
+        });
+    }
+
+    if (btnLogout) {
+        btnLogout.addEventListener('click', async () => {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+            } catch {}
+            localStorage.clear();
+            sessionStorage.clear();
+            hideWaGateOverlay();
+            showWebAuthModal();
+        });
+    }
+}
+
+function bindWhatsAppSessionButtons() {
+    const btnEnd = document.getElementById('wa-btn-end-session');
+    const btnTest = document.getElementById('wa-btn-test-conn');
+    if (btnEnd && !btnEnd.dataset.bound) {
+        btnEnd.dataset.bound = '1';
+        btnEnd.addEventListener('click', async () => {
+            btnEnd.disabled = true;
+            try {
+                const res = await fetch('/api/whatsapp/session/end', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                if (res.ok) {
+                    showHudToast('WhatsApp session ended.');
+                    loadWhatsAppStatus();
+                } else {
+                    showHudToast('Failed to end WhatsApp session.', 'error');
+                }
+            } catch {
+                showHudToast('Network error ending session.', 'error');
+            }
+        });
+    }
+    if (btnTest && !btnTest.dataset.bound) {
+        btnTest.dataset.bound = '1';
+        btnTest.addEventListener('click', async () => {
+            btnTest.disabled = true;
+            try {
+                const res = await fetch('/api/whatsapp/test', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (res.ok && body.status === 'success') {
+                    showHudToast(body.message || 'Test ping sent to your WhatsApp.');
+                } else {
+                    showHudToast(body.message || 'WhatsApp test failed.', 'error');
+                }
+            } catch {
+                showHudToast('Network error sending test.', 'error');
+            } finally {
+                btnTest.disabled = false;
+            }
+        });
+    }
+}
+
+function ensureWhatsAppInboxSummaryBox() {
+    let box = document.getElementById('wa-inbox-summary-box');
+    if (box) return box;
+    const msgList = document.getElementById('wa-messages-list');
+    if (!msgList || !msgList.parentElement) return null;
+    box = document.createElement('div');
+    box.id = 'wa-inbox-summary-box';
+    box.className = 'wa-inbox-summary-box';
+    msgList.parentElement.insertBefore(box, msgList);
+    return box;
+}
+
+function renderWhatsAppInboxSummaryData(summary) {
+    const box = ensureWhatsAppInboxSummaryBox();
+    if (!box) return;
+    const total = Number(summary?.unread_total || 0);
+    const senders = Array.isArray(summary?.senders) ? summary.senders : [];
+    const chipsHtml = senders.length
+        ? senders.map(s => `<span class="wa-inbox-chip">${escapeWaHtml(s.sender_name || s.phone_masked || 'Contact')}: ${Number(s.count || 0)}</span>`).join('')
+        : '<span class="wa-inbox-chip">No unread inbound messages</span>';
+    box.innerHTML = `
+        <div class="wa-inbox-summary-head">
+            <span style="font-size:var(--text-xs); color:var(--text-2);"><strong>Inbox Summary (Counts Only):</strong> ${total} unread</span>
+            <button type="button" class="wa-btn wa-btn-primary" id="wa-btn-read-with-aiva">Read with AIVA</button>
+        </div>
+        <div class="wa-inbox-chips">${chipsHtml}</div>
+    `;
+    const btnReadAiva = document.getElementById('wa-btn-read-with-aiva');
+    if (btnReadAiva) {
+        btnReadAiva.addEventListener('click', () => {
+            const chatNav = document.getElementById('nav-chat');
+            if (chatNav) chatNav.click();
+            if (typeof window.triggerQuickCommand === 'function') {
+                window.triggerQuickCommand('Read my unread WhatsApp messages');
+            }
+        });
+    }
+}
+
+async function loadWhatsAppInboxSummary() {
+    try {
+        const res = await fetch('/api/whatsapp/inbox/summary', { headers: authHeaders() });
+        if (!res.ok) return;
+        const body = await res.json();
+        if (body && body.status === 'success') {
+            renderWhatsAppInboxSummaryData(body);
+        }
+    } catch {}
+}
+
+function bindContactExtraToggles() {
+    const list = document.getElementById('wa-contacts-list');
+    if (!list || list.dataset.waExtraPrefBound) return;
+    list.dataset.waExtraPrefBound = '1';
+    list.addEventListener('change', async (e) => {
+        const target = e.target;
+        if (!target || (!target.classList.contains('wa-toggle-notify') && !target.classList.contains('wa-toggle-priority'))) {
+            return;
+        }
+        const cid = target.getAttribute('data-id');
+        if (!cid) return;
+        const payload = target.classList.contains('wa-toggle-notify')
+            ? { notify_inbound: Boolean(target.checked) }
+            : { priority: Boolean(target.checked) };
+        target.disabled = true;
+        try {
+            const res = await fetch(`/api/whatsapp/contacts/${encodeURIComponent(cid)}`, {
+                method: 'PUT',
+                headers: authHeaders(),
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                target.checked = !target.checked;
+                showHudToast('Failed to update contact preference.', 'error');
+            }
+        } catch {
+            target.checked = !target.checked;
+        } finally {
+            target.disabled = false;
+        }
+    });
+}
+
+async function loadAdminPanel() {
+    if (!window._aivaCurrentUser || !window._aivaCurrentUser.is_admin) return;
+    const tbody = document.getElementById('admin-users-tbody');
+    const unknownBadge = document.getElementById('admin-unknown-24h');
+    const blockedList = document.getElementById('admin-blocked-list');
+    const auditList = document.getElementById('admin-audit-logs');
+
+    try {
+        const [usersRes, auditRes] = await Promise.all([
+            fetch('/api/admin/users', { headers: authHeaders() }),
+            fetch('/api/admin/audit-logs?limit=50', { headers: authHeaders() }),
+        ]);
+        if (usersRes.ok) {
+            const data = await usersRes.json();
+            if (unknownBadge) unknownBadge.textContent = String(data.unknown_sender_24h || 0);
+            if (tbody) {
+                const users = data.users || [];
+                tbody.innerHTML = users.length ? '' : '<tr><td colspan="6">No users found.</td></tr>';
+                users.forEach(u => {
+                    const tr = document.createElement('tr');
+                    const canApprove = u.gate_state !== 'active';
+                    const actionsHtml = u.is_admin
+                        ? '<span class="wa-phase-badge active">Admin</span>'
+                        : `
+                            ${canApprove ? `<button type="button" class="wa-btn wa-btn-primary admin-user-act" data-act="approve" data-uid="${escapeWaHtml(u.id)}">Approve</button>` : ''}
+                            ${u.gate_state === 'approval_pending' ? `<button type="button" class="wa-btn wa-btn-secondary admin-user-act" data-act="deny" data-uid="${escapeWaHtml(u.id)}">Deny</button>` : ''}
+                            ${u.gate_state === 'active' ? `<button type="button" class="wa-btn wa-btn-danger admin-user-act" data-act="revoke" data-uid="${escapeWaHtml(u.id)}">Revoke</button>` : ''}
+                          `;
+                    tr.innerHTML = `
+                        <td><strong>${escapeWaHtml(u.name || 'Unnamed')}</strong><br><span style="color:var(--text-muted);">${escapeWaHtml(u.email || '')}</span></td>
+                        <td>${escapeWaHtml(u.phone_masked || 'Unlinked')}</td>
+                        <td><span class="wa-phase-badge ${u.gate_state === 'active' ? 'active' : 'danger'}">${escapeWaHtml(u.gate_state || 'active')}</span></td>
+                        <td>${escapeWaHtml(u.session_state || 'INACTIVE')}</td>
+                        <td>${Number(u.daily_msg_count || 0)}</td>
+                        <td style="display:flex; gap:6px; flex-wrap:wrap;">${actionsHtml}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+            if (blockedList) {
+                const blocked = data.blocked_numbers || [];
+                blockedList.innerHTML = blocked.length ? '' : '<div class="admin-list-row">No blocked numbers.</div>';
+                blocked.forEach(b => {
+                    const row = document.createElement('div');
+                    row.className = 'admin-list-row';
+                    row.innerHTML = `
+                        <span>${escapeWaHtml(b.phone_masked || '****')} (${escapeWaHtml(b.reason || 'blocked')})</span>
+                        <button type="button" class="wa-btn wa-btn-secondary admin-unblock-btn" data-tok="${escapeWaHtml(b.phone_token || '')}">Unblock</button>
+                    `;
+                    blockedList.appendChild(row);
+                });
+            }
+        }
+        if (auditRes.ok && auditList) {
+            const adata = await auditRes.json();
+            const logs = adata.logs || [];
+            auditList.innerHTML = logs.length ? '' : '<div class="admin-list-row">No admin actions recorded yet.</div>';
+            logs.forEach(lg => {
+                const row = document.createElement('div');
+                row.className = 'admin-list-row';
+                const tsStr = lg.created_at ? new Date(lg.created_at * 1000).toLocaleString() : '';
+                row.innerHTML = `
+                    <span><strong>${escapeWaHtml(lg.action || '')}</strong> ${lg.target_user_id ? '-> ' + escapeWaHtml(lg.target_user_id) : ''}</span>
+                    <span>${escapeWaHtml(tsStr)}</span>
+                `;
+                auditList.appendChild(row);
+            });
+        }
+    } catch (e) {
+        console.warn('Error loading admin panel:', e);
+    }
+}
+
+function initAdminPanel() {
+    const btnRefresh = document.getElementById('admin-btn-refresh');
+    const btnBlock = document.getElementById('admin-btn-block-phone');
+    const blockInput = document.getElementById('admin-block-phone');
+    const tbody = document.getElementById('admin-users-tbody');
+    const blockedList = document.getElementById('admin-blocked-list');
+
+    if (btnRefresh) btnRefresh.addEventListener('click', () => loadAdminPanel());
+
+    if (btnBlock && blockInput) {
+        btnBlock.addEventListener('click', async () => {
+            const phone = blockInput.value.trim();
+            if (!phone) return;
+            btnBlock.disabled = true;
+            try {
+                const res = await fetch('/api/admin/numbers/block', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ phone }),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (res.ok && body.status === 'success') {
+                    blockInput.value = '';
+                    showHudToast(body.message || 'Number blocked.');
+                    loadAdminPanel();
+                } else {
+                    showHudToast(body.message || 'Unable to block number.', 'error');
+                }
+            } finally {
+                btnBlock.disabled = false;
+            }
+        });
+    }
+
+    if (tbody) {
+        tbody.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.admin-user-act');
+            if (!btn) return;
+            const act = btn.getAttribute('data-act');
+            const uid = btn.getAttribute('data-uid');
+            if (!act || !uid) return;
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/admin/users/${encodeURIComponent(uid)}/${encodeURIComponent(act)}`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (res.ok && body.status === 'success') {
+                    showHudToast(body.message || `User ${act}d.`);
+                    loadAdminPanel();
+                } else {
+                    showHudToast(body.message || 'Action failed.', 'error');
+                }
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
+    if (blockedList) {
+        blockedList.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.admin-unblock-btn');
+            if (!btn) return;
+            const phone_token = btn.getAttribute('data-tok');
+            if (!phone_token) return;
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/admin/numbers/unblock', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ phone_token }),
+                });
+                if (res.ok) {
+                    showHudToast('Number unblocked.');
+                    loadAdminPanel();
+                }
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initWaGateOverlay();
+    initAdminPanel();
+    bindContactExtraToggles();
+});

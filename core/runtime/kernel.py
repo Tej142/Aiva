@@ -467,14 +467,7 @@ class AIVAKernel:
         import platform
 
         def _get_active_uid(action_dict):
-            uid = action_dict.get("user_id") or getattr(self, "active_user_id", None)
-            if not uid and self.device_channel and hasattr(self.device_channel, '_device_user_map') and self.device_channel._device_user_map:
-                uid = next(iter(self.device_channel._device_user_map.values()), None)
-            if not uid:
-                primary = self.db.get_primary_user()
-                if primary:
-                    uid = primary["id"]
-            return uid
+            return action_dict.get("user_id") or getattr(self, "active_user_id", None)
 
         async def open_url_action(action):
             uid = _get_active_uid(action)
@@ -876,13 +869,17 @@ class AIVAKernel:
         from services.whatsapp_service import WhatsAppService
         self.whatsapp_service = WhatsAppService(self.db, kernel=self)
 
-        def _deliver_whatsapp_reminder(uid: str, text: str):
+        async def _deliver_whatsapp_reminder(uid: str, text: str, urgency: str = "normal"):
+            if self.whatsapp_service and getattr(self.whatsapp_service, "notifier", None):
+                res = await self.whatsapp_service.notifier.notify_user(uid, text, urgency=urgency)
+                return isinstance(res, dict) and res.get("status") in ("sent", "deferred_quiet_hours")
             links = self.db.get_whatsapp_links_for_user(uid)
             verified = [l for l in links if l.get("status") == "verified"]
             if not verified:
                 return False
             phone = verified[0]["phone_e164"]
-            return self.whatsapp_service.send_whatsapp_message(phone, text, user_id=uid)
+            res = await self.whatsapp_service.send_whatsapp_message(phone, text, user_id=uid)
+            return isinstance(res, dict) and res.get("status") == "success"
 
         async def _deliver_voice_reminder(_uid: str, text: str):
             if self.voice_service:
@@ -907,20 +904,13 @@ class AIVAKernel:
             if not contact or not message:
                 return {"status": "error", "error": "missing_params", "message": "Contact and message are required"}
 
-            resolution = self.whatsapp_service.resolve_contact(uid, contact)
-            if resolution["status"] != "found":
-                return resolution
-
-            c = resolution["contact"]
-            res = await self.whatsapp_service.send_whatsapp_message(c["phone_e164"], message, user_id=uid)
+            res = await self.whatsapp_service.send_to_contact(uid, contact, message)
             if res.get("status") == "success":
-                msg = f"Sent WhatsApp message to {c['display_name']}: {message}"
+                cname = res.get("contact") or contact
                 if self.voice_service:
-                    await self.voice_service.speak(f"Sent message to {c['display_name']}")
-                return {"status": "success", "message": msg, "contact": c["display_name"]}
-            else:
-                err_msg = f"Failed to send WhatsApp message to {c['display_name']}: {res.get('error')}"
-                return {"status": "error", "error": res.get("error"), "message": err_msg}
+                    await self.voice_service.speak(f"Sent message to {cname}")
+                return {"status": "success", "message": res.get("message") or f"Sent to {cname}: {message}", "contact": cname}
+            return res
 
         self.capabilities.register("whatsapp_send", whatsapp_send_action)
 
@@ -1146,7 +1136,7 @@ class AIVAKernel:
 
 
     async def runtime_monitor_loop(self):
-
+        tick_count = 0
         while self.running:
 
             self.state.set(
@@ -1163,6 +1153,12 @@ class AIVAKernel:
 
             )
 
+            if tick_count % 3 == 0 and getattr(self, "whatsapp_service", None) is not None:
+                try:
+                    await self.whatsapp_service.run_periodic_tick()
+                except Exception as wa_tick_err:
+                    print(f"[WhatsApp] Periodic tick error: {type(wa_tick_err).__name__}")
+            tick_count += 1
 
             await asyncio.sleep(
                 5

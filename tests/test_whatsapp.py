@@ -1,9 +1,13 @@
 import os
+import shutil
+import tempfile
 import time
 import unittest
 from unittest.mock import patch, MagicMock
 
+import aiva_server
 from services.database_service import DatabaseService
+from services.whatsapp_config import clear_dotenv_cache
 from services.whatsapp_service import (
     WhatsAppService,
     normalize_phone,
@@ -15,9 +19,16 @@ from services.whatsapp_service import (
 
 class TestWhatsAppChannel(unittest.TestCase):
     def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="aiva_wa_unit_")
+        self._env_path = os.path.join(self._tmpdir, ".env")
+        self._old_env_file = os.environ.get("AIVA_ENV_FILE")
+        os.environ["AIVA_ENV_FILE"] = self._env_path
+        self._write_env()
+
         # Create an in-memory SQLite DatabaseService instance for isolation
         self.db = DatabaseService(db_path=":memory:")
         self.whatsapp_svc = WhatsAppService(db=self.db, kernel=None)
+        aiva_server.invalidate_user_gate_cache()
 
         # Set up two test users to verify data isolation
         self.user_a = "user_alpha_111"
@@ -25,14 +36,47 @@ class TestWhatsAppChannel(unittest.TestCase):
         now = time.time()
         conn = self.db.get_connection()
         conn.execute(
-            "INSERT INTO users (id, email, name, onboarded, created_at, is_active) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.user_a, "alpha@example.com", "Alpha", 1, now, 1),
+            "INSERT INTO users (id, email, name, onboarded, created_at, is_active, gate_state, access_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (self.user_a, "alpha@example.com", "Alpha", 1, now, 1, "active", 1),
         )
         conn.execute(
-            "INSERT INTO users (id, email, name, onboarded, created_at, is_active) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.user_b, "beta@example.com", "Beta", 1, now, 1),
+            "INSERT INTO users (id, email, name, onboarded, created_at, is_active, gate_state, access_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (self.user_b, "beta@example.com", "Beta", 1, now, 1, "active", 1),
         )
         conn.commit()
+
+    def _write_env(self, **overrides):
+        defaults = {
+            "AIVA_WHATSAPP_NUMBER": "919000000000",
+            "AIVA_ADMIN_EMAIL": "alpha@example.com",
+            "WHATSAPP_BRIDGE_SECRET": "test-bridge-secret",
+            "AIVA_ACCESS_USERNAME": "tester",
+            "AIVA_ACCESS_PASSWORD": "secret",
+            "AIVA_ACCESS_EPOCH": "1",
+            "WHATSAPP_MAX_OUTBOUND_PER_HOUR": "20",
+            "WHATSAPP_ALLOW_POWER_CONTROL": "false",
+        }
+        defaults.update(overrides)
+        with open(self._env_path, "w", encoding="utf-8") as f:
+            for k, v in defaults.items():
+                f.write(f'{k}="{v}"\n')
+        clear_dotenv_cache()
+
+    def tearDown(self):
+        aiva_server.invalidate_user_gate_cache()
+        if self._old_env_file is None:
+            os.environ.pop("AIVA_ENV_FILE", None)
+        else:
+            os.environ["AIVA_ENV_FILE"] = self._old_env_file
+        clear_dotenv_cache()
+        try:
+            conn = getattr(getattr(self.db, "_local", None), "conn", None)
+            if conn:
+                conn.close()
+                self.db._local.conn = None
+        except Exception:
+            pass
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     # 1. Number Normalization & Masking
     def test_normalize_phone(self):
@@ -74,22 +118,21 @@ class TestWhatsAppChannel(unittest.TestCase):
 
     # 3. Secret Verification (Constant-Time)
     def test_verify_bridge_secret(self):
-        with patch("services.whatsapp_service.WHATSAPP_BRIDGE_SECRET", "super-secret-token-xyz"):
-            self.assertTrue(verify_bridge_secret("super-secret-token-xyz"))
-            self.assertFalse(verify_bridge_secret("wrong-token"))
-            self.assertFalse(verify_bridge_secret(""))
-            self.assertFalse(verify_bridge_secret(None))
+        self._write_env(WHATSAPP_BRIDGE_SECRET="super-secret-token-xyz")
+        self.assertTrue(verify_bridge_secret("super-secret-token-xyz"))
+        self.assertFalse(verify_bridge_secret("wrong-token"))
+        self.assertFalse(verify_bridge_secret(""))
+        self.assertFalse(verify_bridge_secret(None))
 
     # 4. Linking Flow and OTP Expiry
     def test_linking_flow_and_expiry(self):
         # Start link
         start_res = self.whatsapp_svc.start_link(self.user_a, "+91 99999 11111")
         code = start_res["link_code"]
-        self.assertEqual(len(code), 6)
-        self.assertTrue(code.isdigit())
+        self.assertRegex(code, r"^AIVA-\d{6}$")
 
         # Verify with wrong code -> False
-        self.assertFalse(self.db.verify_whatsapp_link("919999911111", "000000"))
+        self.assertFalse(self.db.verify_whatsapp_link("919999911111", "AIVA-000000"))
 
         # Verify with expired code
         conn = self.db.get_connection()
@@ -171,55 +214,54 @@ class TestWhatsAppChannel(unittest.TestCase):
         import asyncio
         loop = asyncio.new_event_loop()
         try:
-            # 1. Unknown sender sends a message
+            # 1. Unknown sender sends a message -> silently dropped (never reply to strangers)
             payload = {
                 "message_id": "msg_001",
                 "sender": "919888877777@s.whatsapp.net",
                 "text": "Hello AIVA"
             }
             res = loop.run_until_complete(self.whatsapp_svc.handle_inbound(payload))
-            self.assertEqual(res["status"], "ignored_unlinked")
-            # Should send at most one polite notification
-            self.assertEqual(mock_send.call_count, 1)
+            self.assertEqual(res["status"], "dropped_unknown_sender")
+            self.assertEqual(mock_send.call_count, 0)
 
             # 2. Duplicate message id is ignored immediately without sending anything
             res_dup = loop.run_until_complete(self.whatsapp_svc.handle_inbound(payload))
             self.assertEqual(res_dup["status"], "ignored_duplicate")
-            self.assertEqual(mock_send.call_count, 1)
+            self.assertEqual(mock_send.call_count, 0)
         finally:
             loop.close()
 
     # 8. Outbound Rate Limiting
     def test_outbound_rate_limit(self):
-        with patch("services.whatsapp_service.WHATSAPP_MAX_OUTBOUND_PER_HOUR", 3):
-            self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
-            self.whatsapp_svc.record_outbound_send(self.user_a)
-            self.whatsapp_svc.record_outbound_send(self.user_a)
-            self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
-            self.whatsapp_svc.record_outbound_send(self.user_a)
-            # Now at limit (3 sends in 1 hour)
-            self.assertFalse(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
-            # Other user is unaffected
-            self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_b))
+        self._write_env(WHATSAPP_MAX_OUTBOUND_PER_HOUR="3")
+        self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
+        self.whatsapp_svc.record_outbound_send(self.user_a)
+        self.whatsapp_svc.record_outbound_send(self.user_a)
+        self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
+        self.whatsapp_svc.record_outbound_send(self.user_a)
+        # Now at limit (3 sends in 1 hour)
+        self.assertFalse(self.whatsapp_svc.check_outbound_rate_limit(self.user_a))
+        # Other user is unaffected
+        self.assertTrue(self.whatsapp_svc.check_outbound_rate_limit(self.user_b))
 
     # 9. Power Control Block
     @patch("services.whatsapp_service.WhatsAppService.send_whatsapp_message")
     def test_power_control_blocked(self, mock_send):
         import asyncio
-        # Link user_a
-        self.db.create_or_update_whatsapp_link(self.user_a, "919999911111", "123456", time.time() + 600)
-        self.db.verify_whatsapp_link("919999911111", "123456")
+        # Link & activate user_a at current access_epoch=1 with ACTIVE session
+        self.db.upsert_verified_whatsapp_link(self.user_a, "919999911111", verified_by_epoch=1, session_state="ACTIVE")
+        self.db.set_user_gate_state(self.user_a, "active", access_epoch=1)
+        self._write_env(WHATSAPP_ALLOW_POWER_CONTROL="false")
 
         loop = asyncio.new_event_loop()
         try:
-            with patch("services.whatsapp_service.WHATSAPP_ALLOW_POWER_CONTROL", False):
-                payload = {
-                    "message_id": "msg_power_1",
-                    "sender": "919999911111@s.whatsapp.net",
-                    "text": "shutdown computer"
-                }
-                res = loop.run_until_complete(self.whatsapp_svc.handle_inbound(payload))
-                self.assertEqual(res["status"], "power_blocked")
+            payload = {
+                "message_id": "msg_power_1",
+                "sender": "919999911111@s.whatsapp.net",
+                "text": "shutdown computer"
+            }
+            res = loop.run_until_complete(self.whatsapp_svc.handle_inbound(payload))
+            self.assertEqual(res["status"], "power_blocked")
         finally:
             loop.close()
 
@@ -246,10 +288,10 @@ class TestWhatsAppChannel(unittest.TestCase):
         async def _fake_req(method, path, payload=None, timeout=5.0):
             return 200, bridge_payload
 
+        self._write_env(AIVA_ADMIN_EMAIL="alpha@example.com")
         loop = asyncio.new_event_loop()
         try:
-            with patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "alpha@example.com"), \
-                 patch.object(self.whatsapp_svc, "_bridge_request", side_effect=_fake_req):
+            with patch.object(self.whatsapp_svc, "_bridge_request", side_effect=_fake_req):
                 owner_status = loop.run_until_complete(self.whatsapp_svc.get_user_status(self.user_a))
                 other_status = loop.run_until_complete(self.whatsapp_svc.get_user_status(self.user_b))
 
@@ -263,7 +305,7 @@ class TestWhatsAppChannel(unittest.TestCase):
             self.assertNotIn("qr", other_status["bridge"]["pairing"])
             self.assertNotIn("qr_data_url", other_status["bridge"]["pairing"])
             self.assertNotIn("pairing_code", other_status["bridge"]["pairing"])
-            self.assertTrue(other_status["bridge"]["pairing"]["active"])
+            self.assertFalse(other_status["bridge"]["pairing"]["active"])
         finally:
             loop.close()
 
@@ -289,11 +331,11 @@ class TestWhatsAppChannel(unittest.TestCase):
 
         owner_user = {"id": self.user_a, "email": "alpha@example.com"}
         other_user = {"id": self.user_b, "email": "beta@example.com"}
+        self._write_env(AIVA_ADMIN_EMAIL="alpha@example.com")
 
         loop = asyncio.new_event_loop()
         try:
-            with patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "alpha@example.com"), \
-                 patch.object(self.whatsapp_svc, "_bridge_request", side_effect=_fake_req):
+            with patch.object(self.whatsapp_svc, "_bridge_request", side_effect=_fake_req):
                 # Non-owner blocked from all pairing mutations
                 c1, _ = loop.run_until_complete(self.whatsapp_svc.start_bridge_pairing(other_user, mode="qr"))
                 c2, _ = loop.run_until_complete(self.whatsapp_svc.cancel_bridge_pairing(other_user))
@@ -331,7 +373,6 @@ class TestWhatsAppChannel(unittest.TestCase):
     # 12. Flask API Endpoints for WhatsApp Status & Pairing Mode
     def test_flask_whatsapp_status_and_pairing_routes(self):
         import asyncio
-        import aiva_server
 
         async def _fake_req(method, path, payload=None, timeout=5.0):
             if method == "GET" and path == "/status":
@@ -351,10 +392,10 @@ class TestWhatsAppChannel(unittest.TestCase):
 
         mock_kernel = MagicMock()
         mock_kernel.whatsapp_service = self.whatsapp_svc
+        self._write_env(AIVA_ADMIN_EMAIL="alpha@example.com")
 
         client = aiva_server.app.test_client()
-        with patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "alpha@example.com"), \
-             patch.object(aiva_server, "db", self.db), \
+        with patch.object(aiva_server, "db", self.db), \
              patch.object(aiva_server, "kernel", mock_kernel), \
              patch.object(aiva_server, "run_async", side_effect=lambda coro, timeout=25.0: asyncio.run(coro)), \
              patch.object(aiva_server.auth_service, "verify_access_token", return_value={"sub": self.user_a}), \

@@ -11,6 +11,7 @@ import jwt
 from dotenv import load_dotenv
 
 from services.database_service import DatabaseService
+from services.whatsapp_config import is_admin_email
 from core.shared.logger import get_logger
 
 # Load environment variables from .env
@@ -125,6 +126,8 @@ class AuthService:
     # -------------------------------------------------------------
     def request_otp(self, email: str, ip_address: Optional[str] = None, name: str = "") -> Tuple[bool, str]:
         email = email.strip().lower()
+        if email.endswith("@wa.invalid"):
+            return False, "This account uses WhatsApp verification only."
         if not EMAIL_REGEX.match(email):
             return False, "Invalid email address format."
 
@@ -194,22 +197,35 @@ class AuthService:
         user = self.db.get_user_by_email(email)
         if not user:
             user_id = str(uuid.uuid4())
-            user = self.db.create_user(user_id=user_id, email=email, name=resolved_name, onboarded=0)
-            logger.info(f"New user registered: {email} ({user_id})")
+            user = self.db.create_user(
+                user_id=user_id,
+                email=email,
+                name=resolved_name,
+                onboarded=0,
+                gate_state="number_pending",
+                auth_source="email_otp",
+            )
+            logger.info(f"New user registered: {email} ({user_id}) [gate_state=number_pending]")
         else:
+            if not user.get("is_active", 1) or user.get("gate_state") in ("blocked", "revoked"):
+                return False, "Access is blocked or revoked for this account.", None
             if resolved_name and not user.get("name"):
                 self.db.update_user(user["id"], name=resolved_name)
                 user["name"] = resolved_name
 
-        # Generate JWT access token & refresh token
-        tokens = self.generate_tokens(user["id"], user["email"])
+        # Generate JWT access token & refresh token bound to current token_version
+        tv = int(user.get("token_version", 1) or 1)
+        tokens = self.generate_tokens(user["id"], user["email"], token_version=tv)
         return True, "Verification successful.", {
             "user": {
                 "id": user["id"],
                 "email": user["email"],
                 "name": user.get("name", ""),
                 "onboarded": user.get("onboarded", 0),
-                "created_at": user["created_at"]
+                "gate_state": user.get("gate_state", "number_pending"),
+                "auth_source": user.get("auth_source", "email_otp"),
+                "is_admin": is_admin_email(user["email"]),
+                "created_at": user["created_at"],
             },
             "tokens": tokens
         }
@@ -217,12 +233,16 @@ class AuthService:
     # -------------------------------------------------------------
     # TOKEN LIFECYCLE
     # -------------------------------------------------------------
-    def generate_tokens(self, user_id: str, email: str) -> Dict[str, Any]:
+    def generate_tokens(self, user_id: str, email: str, token_version: Optional[int] = None) -> Dict[str, Any]:
         now = time.time()
+        if token_version is None:
+            user = self.db.get_user_by_id(user_id)
+            token_version = int(user.get("token_version", 1) or 1) if user else 1
         access_payload = {
             "sub": user_id,
             "email": email,
             "type": "access",
+            "tv": int(token_version),
             "jti": secrets.token_hex(8),
             "iat": int(now),
             "exp": int(now + self.access_token_expiry_sec)
@@ -247,6 +267,18 @@ class AuthService:
             payload = jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
             if payload.get("type") != "access":
                 return None
+            sub = payload.get("sub")
+            if sub:
+                user = self.db.get_user_by_id(sub)
+                if user:
+                    if not user.get("is_active", 1) or user.get("gate_state") in ("blocked", "revoked"):
+                        return None
+                    if "tv" in payload:
+                        try:
+                            if int(payload["tv"]) != int(user.get("token_version", 1) or 1):
+                                return None
+                        except (TypeError, ValueError):
+                            return None
             return payload
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             return None
@@ -261,11 +293,11 @@ class AuthService:
             return False, "Invalid or expired refresh token.", None
 
         user = self.db.get_user_by_id(record["user_id"])
-        if not user or not user["is_active"]:
-            return False, "User account is inactive or not found.", None
+        if not user or not user.get("is_active", 1) or user.get("gate_state") in ("blocked", "revoked"):
+            return False, "User account is inactive, blocked, or not found.", None
 
         # Issue new access token (keep same refresh token or rotate)
-        tokens = self.generate_tokens(user["id"], user["email"])
+        tokens = self.generate_tokens(user["id"], user["email"], token_version=int(user.get("token_version", 1) or 1))
         # Revoke old refresh token on rotation
         self.db.revoke_refresh_token(refresh_hash)
 

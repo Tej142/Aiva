@@ -95,8 +95,8 @@ def sanitize_for_speech(text: str, max_chars: int = 400) -> str:
     text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
 
     # 7. ASCII emoticons
-    text = re.sub(r"[:;=8][\-o\*\']?[\)\]\(\[dDpP/\:\}\{@\|\\]", "", text)
-    text = re.sub(r"[\)\]\(\[dDpP][\-o\*\']?[:;=8]", "", text)
+    text = re.sub(r"(?<!\w)[:;=8][\-o\*\']?[\)\]\(\[dDpP/\:\}\{@\|\\](?!\w)", "", text)
+    text = re.sub(r"(?<!\w)[\)\]\(\[dDpP][\-o\*\']?[:;=8](?!\w)", "", text)
     text = re.sub(r"\bxD\b|\bXD\b|\bhaha\b|\blol\b|\bhehe\b", "", text, flags=re.IGNORECASE)
 
     # 8. Unicode emojis

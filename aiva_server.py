@@ -16,6 +16,7 @@ import json
 import queue
 import time
 from functools import wraps
+from typing import Any, Dict, Optional, Tuple
 from flask import Flask, request, jsonify, send_from_directory, make_response, send_file, redirect, Response, stream_with_context
 from flask_cors import CORS
 from flask_sock import Sock
@@ -29,6 +30,7 @@ from services.database_service import DatabaseService
 from services.auth_service import AuthService
 from services.device_manager import DeviceManager
 from services.device_channel import DeviceChannel
+from services.whatsapp_config import get_wa_config, is_admin_user, mask_phone
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 app = Flask(__name__, static_folder=UI_DIR)
@@ -47,6 +49,90 @@ _fallback_memory_engine = None
 _memory_engine_lock = threading.RLock()
 _hud_ws_clients = {}
 _hud_ws_lock = threading.RLock()
+_gate_cache: Dict[str, Tuple[int, float, Optional[Dict[str, Any]]]] = {}
+_gate_cache_lock = threading.RLock()
+_GATE_CACHE_TTL_SEC = 1.5
+
+_GATE_EXEMPT_EXACT = frozenset({
+    "/",
+    "/health",
+    "/api/status",
+    "/alexa",
+    "/download/windows-agent",
+    "/download/agent",
+    "/api/auth/register",
+    "/api/auth/login",
+    "/api/auth/verify-otp",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/whatsapp/link/start",
+    "/api/whatsapp/link/verify-outbound",
+    "/api/whatsapp/link/status",
+    "/api/whatsapp/status",
+})
+
+
+def invalidate_user_gate_cache(user_id: Optional[str] = None) -> None:
+    """Immediately invalidate short-lived user verification gate cache."""
+    with _gate_cache_lock:
+        if user_id:
+            _gate_cache.pop(user_id, None)
+        else:
+            _gate_cache.clear()
+
+
+def _get_cached_user_state(user_id: str) -> Optional[Dict[str, Any]]:
+    """Short-TTL (1.5s) user gate lookup, scoped cleanly to current db instance."""
+    now = time.time()
+    cur_db_id = id(db)
+    with _gate_cache_lock:
+        cached = _gate_cache.get(user_id)
+        if cached and cached[0] == cur_db_id and now < cached[1]:
+            return cached[2]
+
+    user = db.get_user_by_id(user_id)
+    state = (
+        {
+            "is_active": int(user.get("is_active", 1)),
+            "gate_state": user.get("gate_state", "active"),
+            "token_version": int(user.get("token_version", 1) or 1),
+            "email": user.get("email", ""),
+        }
+        if user
+        else None
+    )
+    with _gate_cache_lock:
+        _gate_cache[user_id] = (cur_db_id, now + _GATE_CACHE_TTL_SEC, state)
+    return state
+
+
+def disconnect_hud_user(user_id: str, reason: str = "revoked") -> int:
+    """Immediately close all open HUD WebSockets for user_id and their device sockets."""
+    if not user_id:
+        return 0
+    closed = 0
+    with _hud_ws_lock:
+        conns = list(_hud_ws_clients.pop(user_id, set()))
+    for ws in conns:
+        try:
+            ws.send(json.dumps({"type": "session_revoked", "reason": reason}))
+        except Exception:
+            pass
+        try:
+            ws.close()
+        except Exception:
+            pass
+        closed += 1
+    if device_channel:
+        closed += device_channel.disconnect_user(user_id, reason=reason)
+    return closed
+
+
+def invalidate_user_sessions(user_id: str, reason: str = "revoked") -> None:
+    """Clear gate cache and drop active HUD + Device sockets for user_id."""
+    invalidate_user_gate_cache(user_id)
+    disconnect_hud_user(user_id, reason=reason)
 
 
 def _get_memory_engine() -> MemoryEngine:
@@ -143,7 +229,7 @@ def _deliver_to_hud(user_id: str, payload: dict) -> bool:
 
 
 def get_authenticated_user():
-    """Extract and verify user from Bearer header, cookie, device token, or active channel."""
+    """Extract and verify user from Bearer header, cookie, device token, checking active/token_version."""
     auth_header = request.headers.get("Authorization", "")
     token = None
     if auth_header.startswith("Bearer "):
@@ -157,7 +243,13 @@ def get_authenticated_user():
             user_id = payload.get("sub")
             if user_id:
                 user = db.get_user_by_id(user_id)
-                if user:
+                if user and user.get("is_active", 1) and user.get("gate_state", "active") not in ("blocked", "revoked"):
+                    if "tv" in payload:
+                        try:
+                            if int(payload["tv"]) != int(user.get("token_version", 1) or 1):
+                                return None
+                        except (TypeError, ValueError):
+                            return None
                     return user
 
     # Fallback 1: Device token header
@@ -166,9 +258,59 @@ def get_authenticated_user():
         device = device_manager.get_device_by_token(device_token)
         if device and device.get("user_id"):
             user = db.get_user_by_id(device["user_id"])
-            if user:
+            if user and user.get("is_active", 1) and user.get("gate_state", "active") not in ("blocked", "revoked"):
                 return user
 
+    return None
+
+
+@app.before_request
+def _enforce_verification_gate():
+    """
+    Central server-side verification gate middleware.
+    Authenticated users whose gate_state != 'active' receive HTTP 403
+    ('verification_required' or 'approval_required') across protected endpoints.
+    """
+    if request.method == "OPTIONS":
+        return None
+    path = request.path or "/"
+    if path in _GATE_EXEMPT_EXACT:
+        return None
+    if path.startswith("/internal/"):
+        return None
+    # Static HUD asset routes (/<path:filename>) do not begin with /api/, /ws/, /command
+    if not path.startswith("/api/") and not path.startswith("/ws/") and path not in ("/command", "/alexa"):
+        return None
+
+    user = get_authenticated_user()
+    if not user:
+        return None  # Let @require_auth handle 401
+
+    state = _get_cached_user_state(user["id"])
+    if not state or not state.get("is_active", 1) or state.get("gate_state") in ("blocked", "revoked"):
+        return jsonify({
+            "status": "error",
+            "error": "account_revoked",
+            "code": "verification_required",
+            "gate_state": state.get("gate_state", "revoked") if state else "revoked",
+            "message": "Account access is blocked or revoked.",
+        }), 403
+
+    gate_state = state.get("gate_state", "active")
+    if gate_state != "active":
+        code = "approval_required" if gate_state == "approval_pending" else "verification_required"
+        msg = (
+            "Your account is pending owner approval."
+            if code == "approval_required"
+            else "WhatsApp verification required before using AIVA."
+        )
+        return jsonify({
+            "status": "error",
+            "error": code,
+            "code": code,
+            "gate_state": gate_state,
+            "message": msg,
+        }), 403
     return None
 
 
@@ -779,6 +921,8 @@ def auth_me(user):
         dev["is_online"] = dev["id"] in online_ids
 
     fresh_user = db.get_user_by_id(user["id"]) or user
+    link = db.get_verified_link_for_user(fresh_user["id"]) if hasattr(db, "get_verified_link_for_user") else None
+    gate_state = fresh_user.get("gate_state", "active")
     return jsonify({
         "status": "success",
         "user": {
@@ -786,7 +930,12 @@ def auth_me(user):
             "email": fresh_user["email"],
             "name": fresh_user.get("name", ""),
             "onboarded": fresh_user.get("onboarded", 0),
-            "created_at": fresh_user["created_at"]
+            "gate_state": gate_state,
+            "auth_source": fresh_user.get("auth_source", "email_otp"),
+            "is_admin": is_admin_user(fresh_user),
+            "whatsapp_linked": bool(link),
+            "verified_phone_masked": mask_phone(link["phone_e164"]) if link else "",
+            "created_at": fresh_user["created_at"],
         },
         "devices": devices
     })
@@ -908,15 +1057,24 @@ def ws_hud_endpoint(ws):
     uid = payload.get("sub") or payload.get("user_id")
     if not uid:
         return
+    hud_user = db.get_user_by_id(uid)
+    if not hud_user or not hud_user.get("is_active", 1) or hud_user.get("gate_state", "active") in ("blocked", "revoked"):
+        try:
+            ws.send(json.dumps({"type": "error", "error": "unauthorized"}))
+        except Exception:
+            pass
+        return
     with _hud_ws_lock:
         _hud_ws_clients.setdefault(uid, set()).add(ws)
     try:
-        ws.send(json.dumps({"type": "connected", "channel": "hud"}))
-        # Flush recent undelivered notifications on connect
-        mem = _get_memory_engine()
-        recent = mem.scheduler.recent_notifications.get(uid, [])[-5:]
-        for item in recent:
-            ws.send(json.dumps({"type": "memory_notification", **item}))
+        gate_state = hud_user.get("gate_state", "active")
+        ws.send(json.dumps({"type": "connected", "channel": "hud", "gate_state": gate_state}))
+        # Flush recent undelivered notifications only for active verified accounts
+        if gate_state == "active":
+            mem = _get_memory_engine()
+            recent = mem.scheduler.recent_notifications.get(uid, [])[-5:]
+            for item in recent:
+                ws.send(json.dumps({"type": "memory_notification", **item}))
         while True:
             msg = ws.receive(timeout=30)
             if msg is None:
@@ -1357,18 +1515,16 @@ def alexa_webhook():
         print(f"[Alexa Prompt]: '{query}'")
 
         try:
-            # Bind user context to kernel if available
-            if kernel and not kernel.active_user_id:
-                primary = db.get_primary_user()
-                if primary:
-                    kernel.active_user_id = primary["id"]
+            active_uid = getattr(kernel, "active_user_id", None) if kernel else None
+            if not active_uid:
+                return jsonify(build_alexa_response("Please authenticate an active AIVA user session before issuing commands.", should_end_session=False))
 
             # Process query through AIVA without PC TTS (since Echo will speak the response)
             result = run_async(
                 kernel.input_handler.process_query(
                     query,
                     speak=False,
-                    user_id=getattr(kernel, "active_user_id", None),
+                    user_id=active_uid,
                     channel="voice",
                 )
             )
@@ -1394,28 +1550,20 @@ def alexa_webhook():
 # SIMPLE REST WEBHOOK (For direct HTTP calls / IFTTT / Alexa Routines)
 # =====================================================================
 @app.route("/command", methods=["POST"])
-def direct_command():
+@require_auth
+def direct_command(user):
     data = request.json or {}
     msg = data.get("message") or data.get("query") or ""
 
     if not msg:
         return jsonify({"status": "error", "message": "Missing 'message' field"}), 400
 
-    auth_user = get_authenticated_user()
-    if auth_user and kernel:
-        kernel.active_user_id = auth_user["id"]
-    elif kernel and not kernel.active_user_id:
-        primary = db.get_primary_user()
-        if primary:
-            kernel.active_user_id = primary["id"]
-
-    print(f"\n[HTTP Command]: {msg} (User: {getattr(kernel, 'active_user_id', 'none')})")
     try:
         result = run_async(
             kernel.input_handler.process_query(
                 msg,
                 speak=True,
-                user_id=getattr(kernel, "active_user_id", None),
+                user_id=user["id"],
                 channel="hud",
             )
         )
@@ -1493,7 +1641,9 @@ def api_whatsapp_status(user):
 @app.route("/api/whatsapp/pair/start", methods=["POST"])
 @require_auth
 def api_whatsapp_pair_start(user):
-    """Starts Baileys WhatsApp device pairing mode (QR or 8-digit phone code)."""
+    """Starts Baileys WhatsApp device pairing mode (admin only)."""
+    if not is_admin_user(user):
+        return jsonify({"status": "error", "error": "forbidden", "message": "Admin access required."}), 403
     if not kernel or not hasattr(kernel, "whatsapp_service"):
         return jsonify({"status": "error", "message": "Kernel not ready"}), 503
     data = request.json or {}
@@ -1509,7 +1659,9 @@ def api_whatsapp_pair_start(user):
 @app.route("/api/whatsapp/pair/cancel", methods=["POST"])
 @require_auth
 def api_whatsapp_pair_cancel(user):
-    """Cancels an in-progress WhatsApp bridge pairing session."""
+    """Cancels an in-progress WhatsApp bridge pairing session (admin only)."""
+    if not is_admin_user(user):
+        return jsonify({"status": "error", "error": "forbidden", "message": "Admin access required."}), 403
     if not kernel or not hasattr(kernel, "whatsapp_service"):
         return jsonify({"status": "error", "message": "Kernel not ready"}), 503
     code, body = run_async(kernel.whatsapp_service.cancel_bridge_pairing(user), timeout=10.0)
@@ -1519,7 +1671,9 @@ def api_whatsapp_pair_cancel(user):
 @app.route("/api/whatsapp/pair/logout", methods=["POST"])
 @require_auth
 def api_whatsapp_pair_logout(user):
-    """Logs out the active Baileys session and clears credentials for re-pairing."""
+    """Logs out the active Baileys session and clears credentials (admin only)."""
+    if not is_admin_user(user):
+        return jsonify({"status": "error", "error": "forbidden", "message": "Admin access required."}), 403
     if not kernel or not hasattr(kernel, "whatsapp_service"):
         return jsonify({"status": "error", "message": "Kernel not ready"}), 503
     code, body = run_async(kernel.whatsapp_service.logout_bridge(user), timeout=10.0)
@@ -1539,6 +1693,62 @@ def api_whatsapp_link_start(user):
         return jsonify({"status": "success", "data": res})
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/api/whatsapp/link/verify-outbound", methods=["POST"])
+@require_auth
+def api_whatsapp_link_verify_outbound(user):
+    """Verifies an outbound 6-digit code submitted in the HUD (when WHATSAPP_VERIFY_MODE=outbound)."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    data = request.json or {}
+    code = str(data.get("code") or "").strip()
+    if not code:
+        return jsonify({"status": "error", "message": "Verification code is required"}), 400
+    ok, msg, extra = kernel.whatsapp_service.verify_outbound_hud_code(user["id"], code)
+    if ok:
+        return jsonify({"status": "success", "message": msg, **extra})
+    return jsonify({"status": "error", "message": msg}), 400
+
+
+@app.route("/api/whatsapp/session/end", methods=["POST"])
+@require_auth
+def api_whatsapp_session_end(user):
+    """Ends the user's active WhatsApp session immediately (sets state to INACTIVE)."""
+    db.set_whatsapp_session_state(user["id"], "INACTIVE")
+    invalidate_user_gate_cache(user["id"])
+    return jsonify({"status": "success", "session_state": "INACTIVE"})
+
+
+@app.route("/api/whatsapp/test", methods=["POST"])
+@require_auth
+def api_whatsapp_test(user):
+    """Sends a test message to the authenticated user's own verified personal number."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    link = db.get_verified_link_for_user(user["id"])
+    if not link or not link.get("phone_e164"):
+        return jsonify({"status": "error", "message": "No verified personal WhatsApp number linked."}), 400
+    res = run_async(
+        kernel.whatsapp_service.notifier.notify_user(
+            user["id"], "AIVA test message: your WhatsApp channel is connected.", urgency="urgent"
+        ),
+        timeout=10.0,
+    )
+    if isinstance(res, dict) and res.get("status") in ("sent", "ok"):
+        return jsonify({"status": "success", "message": "Test message sent to your verified WhatsApp number."})
+    return jsonify({"status": "error", "message": f"Test failed ({res.get('status') if isinstance(res, dict) else 'error'})."}), 502
+
+
+@app.route("/api/whatsapp/inbox/summary", methods=["GET"])
+@require_auth
+def api_whatsapp_inbox_summary(user):
+    """Metadata-only unread counts grouped by sender (never returns message bodies)."""
+    if not kernel or not hasattr(kernel, "whatsapp_service"):
+        return jsonify({"status": "error", "message": "Kernel not ready"}), 503
+    sender = (request.args.get("sender") or "").strip() or None
+    res = kernel.whatsapp_service.get_inbox_status(user["id"], sender=sender, turn_origin="user_explicit")
+    return jsonify(res)
 
 
 @app.route("/api/whatsapp/link/unlink", methods=["POST"])
@@ -1565,6 +1775,8 @@ def api_whatsapp_contacts(user):
         aliases = data.get("aliases", [])
         trusted = bool(data.get("trusted", True))
         is_self = bool(data.get("is_self", False))
+        notify_inbound = data.get("notify_inbound")
+        priority = data.get("priority")
 
         if not display_name or not phone:
             return jsonify({"status": "error", "message": "Display name and phone are required"}), 400
@@ -1577,6 +1789,15 @@ def api_whatsapp_contacts(user):
             is_self=is_self,
             trusted=trusted
         )
+        if notify_inbound is not None or priority is not None:
+            updated = db.update_whatsapp_contact(
+                user_id=uid,
+                contact_id=contact["id"],
+                notify_inbound=bool(notify_inbound) if notify_inbound is not None else None,
+                priority=bool(priority) if priority is not None else None,
+            )
+            if updated:
+                contact = updated
         return jsonify({"status": "success", "contact": contact})
 
     contacts = db.get_whatsapp_contacts(uid)
@@ -1600,7 +1821,9 @@ def api_whatsapp_contact_detail(user, contact_id):
         phone_e164=data.get("phone"),
         aliases=data.get("aliases"),
         trusted=data.get("trusted"),
-        is_self=data.get("is_self")
+        is_self=data.get("is_self"),
+        notify_inbound=data.get("notify_inbound"),
+        priority=data.get("priority"),
     )
     if not updated:
         return jsonify({"status": "error", "message": "Contact not found"}), 404
@@ -1660,6 +1883,153 @@ def api_whatsapp_messages_read(user):
     return jsonify(res)
 
 
+# =====================================================================
+# ADMIN RBAC & ACCESS GOVERNANCE ROUTES (STRICT ADMIN ONLY)
+# =====================================================================
+def _admin_forbidden_resp():
+    return jsonify({"status": "error", "error": "forbidden", "message": "Admin access required."}), 403
+
+
+def _admin_user_action(actor, uid: str, verb: str):
+    if kernel and hasattr(kernel, "whatsapp_service") and kernel.whatsapp_service:
+        res = kernel.whatsapp_service.execute_admin_command(actor["id"], f"{verb} {uid}")
+        status = res.get("status")
+        if status == "success":
+            invalidate_user_gate_cache(uid)
+            return jsonify({"status": "success", "message": res.get("message", "Done.")}), 200
+        code = 403 if status == "forbidden" else (404 if status == "not_found" else 400)
+        return jsonify({"status": "error", "message": res.get("message", "Action failed.")}), code
+
+    # DB-only fallback if kernel not running in unit tests
+    from services.whatsapp_config import get_wa_config
+    cfg = get_wa_config()
+    target = db.get_user_by_id(uid)
+    if not target:
+        return jsonify({"status": "error", "message": "User not found."}), 404
+    if is_admin_user(target, cfg) and verb in ("deny", "revoke"):
+        return jsonify({"status": "error", "message": "Cannot revoke or deny configured admin."}), 400
+    if verb == "approve":
+        db.set_user_gate_state(
+            uid, "active", approved_by=actor["id"], approved_at=time.time(), access_epoch=cfg.access_epoch, is_active=1
+        )
+        db.record_admin_audit(actor["id"], "approve_user", uid)
+        invalidate_user_gate_cache(uid)
+        _deliver_to_hud(uid, {"type": "verification_unlocked", "gate_state": "active"})
+        return jsonify({"status": "success", "message": "User approved."}), 200
+
+    db.set_user_gate_state(uid, "revoked", blocked_reason=verb, is_active=0, bump_token_version=True)
+    db.revoke_all_user_tokens(uid)
+    db.set_whatsapp_session_state(uid, "INACTIVE")
+    db.record_admin_audit(actor["id"], f"{verb}_user", uid)
+    invalidate_user_sessions(uid, reason="revoked")
+    return jsonify({"status": "success", "message": f"User {verb}d."}), 200
+
+
+@app.route("/api/admin/users", methods=["GET"])
+@require_auth
+def api_admin_users(user):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    users = db.list_all_users_admin_summary()
+    unknown_24h = db.get_unknown_sender_count(86400)
+    blocked = db.list_blocked_numbers()
+    return jsonify({
+        "status": "success",
+        "users": users,
+        "unknown_sender_24h": unknown_24h,
+        "blocked_numbers": blocked,
+    })
+
+
+@app.route("/api/admin/users/<uid>/approve", methods=["POST"])
+@require_auth
+def api_admin_approve_user(user, uid):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    return _admin_user_action(user, uid, "approve")
+
+
+@app.route("/api/admin/users/<uid>/deny", methods=["POST"])
+@require_auth
+def api_admin_deny_user(user, uid):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    return _admin_user_action(user, uid, "deny")
+
+
+@app.route("/api/admin/users/<uid>/revoke", methods=["POST"])
+@require_auth
+def api_admin_revoke_user(user, uid):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    return _admin_user_action(user, uid, "revoke")
+
+
+@app.route("/api/admin/numbers/block", methods=["POST"])
+@require_auth
+def api_admin_block_number(user):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    data = request.json or {}
+    raw_phone = str(data.get("phone") or "").strip()
+    if not raw_phone:
+        return jsonify({"status": "error", "message": "Phone number required."}), 400
+    if kernel and hasattr(kernel, "whatsapp_service") and kernel.whatsapp_service:
+        res = kernel.whatsapp_service.execute_admin_command(user["id"], f"block {raw_phone}")
+        if res.get("status") == "success":
+            return jsonify({"status": "success", "message": res.get("message", "Blocked.")})
+        return jsonify({"status": "error", "message": res.get("message", "Unable to block number.")}), 400
+
+    from services.whatsapp_config import get_wa_config, normalize_phone, mask_phone
+    cfg = get_wa_config()
+    phone = normalize_phone(raw_phone)
+    if not phone or (cfg.aiva_whatsapp_number and phone == cfg.aiva_whatsapp_number):
+        return jsonify({"status": "error", "message": "Invalid or protected phone number."}), 400
+    link = db.get_whatsapp_link_by_phone(phone)
+    target_uid = link["user_id"] if link else ""
+    if target_uid:
+        t_user = db.get_user_by_id(target_uid)
+        if is_admin_user(t_user, cfg):
+            return jsonify({"status": "error", "message": "Cannot block configured admin number."}), 400
+        db.set_user_gate_state(target_uid, "blocked", blocked_reason="admin_blocked", is_active=0, bump_token_version=True)
+        db.revoke_all_user_tokens(target_uid)
+        db.set_whatsapp_session_state(target_uid, "INACTIVE")
+        invalidate_user_sessions(target_uid, reason="blocked")
+    db.block_number(phone, blocked_by=user["id"], reason="admin_hud")
+    db.record_admin_audit(user["id"], "block_number", target_uid)
+    return jsonify({"status": "success", "message": f"Blocked number {mask_phone(phone)}."})
+
+
+@app.route("/api/admin/numbers/unblock", methods=["POST"])
+@require_auth
+def api_admin_unblock_number(user):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    data = request.json or {}
+    raw_phone = str(data.get("phone") or "").strip()
+    phone_token = str(data.get("phone_token") or "").strip()
+    if not raw_phone and not phone_token:
+        return jsonify({"status": "error", "message": "Phone number or token required."}), 400
+    from services.whatsapp_config import mask_phone, normalize_phone
+    ok = db.unblock_number(raw_phone, phone_token=phone_token)
+    label = mask_phone(normalize_phone(raw_phone)) if raw_phone else phone_token
+    db.record_admin_audit(user["id"], "unblock_number", label)
+    return jsonify({"status": "success" if ok else "not_found", "unblocked": ok})
+
+
+@app.route("/api/admin/audit-logs", methods=["GET"])
+@require_auth
+def api_admin_audit_logs(user):
+    if not is_admin_user(user):
+        return _admin_forbidden_resp()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 100)), 250))
+    except (TypeError, ValueError):
+        limit = 100
+    logs = db.list_admin_audit_logs(limit=limit)
+    return jsonify({"status": "success", "logs": logs})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -1681,12 +2051,10 @@ def start_kernel_background():
     kernel.memory_engine.scheduler.hud_deliver = _deliver_to_hud
     if getattr(kernel, "outcome_reporter", None):
         kernel.outcome_reporter.hud_deliver = _deliver_to_hud
+    if getattr(kernel, "whatsapp_service", None):
+        kernel.whatsapp_service.hud_deliver = _deliver_to_hud
+        kernel.whatsapp_service.session_invalidator = invalidate_user_sessions
     device_channel.set_event_loop(kernel_loop)
-
-    # Attach primary user if available
-    primary = db.get_primary_user()
-    if primary:
-        kernel.active_user_id = primary["id"]
 
     kernel_loop.run_until_complete(kernel.start_server())
     # Start the adaptive voice runtime (listens on mic if available, harmlessly skips if headless)

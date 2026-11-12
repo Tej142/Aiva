@@ -133,6 +133,28 @@ class DeviceChannel:
         user_id = device_record["user_id"]
         device_name = device_record["name"]
 
+        owner = self.db.get_user_by_id(user_id)
+        if not owner or not owner.get("is_active", 1) or owner.get("gate_state", "active") != "active":
+            gate_state = owner.get("gate_state", "revoked") if owner else "revoked"
+            err_code = "approval_required" if gate_state == "approval_pending" else "verification_required"
+            msg_text = "Approval required" if err_code == "approval_required" else "Verification required"
+            logger.warning(f"Device connection rejected for gated user {user_id}: gate_state={gate_state}")
+            try:
+                ws.send(json.dumps({
+                    "v": 1,
+                    "type": "error",
+                    "code": err_code,
+                    "gate_state": gate_state,
+                    "message": msg_text,
+                }))
+                try:
+                    ws.close(reason=4003, message=err_code)
+                except TypeError:
+                    ws.close(reason=err_code)
+            except Exception:
+                pass
+            return
+
         # Register connection
         with self._channel_lock:
             # If an existing socket was connected for this device, gracefully close it
@@ -241,6 +263,18 @@ class DeviceChannel:
         """
         params = params or {}
 
+        owner = self.db.get_user_by_id(user_id)
+        if owner and (not owner.get("is_active", 1) or owner.get("gate_state", "active") != "active"):
+            gate_state = owner.get("gate_state", "revoked")
+            err_code = "approval_required" if gate_state == "approval_pending" else "verification_required"
+            msg = "Approval required." if err_code == "approval_required" else "Verification required."
+            return {
+                "status": "error",
+                "error": err_code,
+                "message": msg,
+                "result": msg,
+            }
+
         # Find target online device
         target_device = self.find_target_device(user_id, target_name=target_device_name)
         if not target_device:
@@ -342,3 +376,42 @@ class DeviceChannel:
                 "message": err_msg,
                 "result": err_msg
             }
+
+    def disconnect_user(self, user_id: str, reason: str = "revoked") -> int:
+        """Immediately disconnect all active device WebSockets for user_id."""
+        if not user_id:
+            return 0
+        closed = 0
+        sockets_to_close = []
+        with self._channel_lock:
+            dev_ids = [did for did, uid in self._device_user_map.items() if uid == user_id]
+            for did in dev_ids:
+                ws = self._connections.pop(did, None)
+                self._device_user_map.pop(did, None)
+                if ws:
+                    sockets_to_close.append((did, ws))
+        for did, ws in sockets_to_close:
+            try:
+                ws.send(json.dumps({
+                    "v": 1,
+                    "type": "error",
+                    "code": reason,
+                    "message": "Session terminated by server."
+                }))
+            except Exception:
+                pass
+            try:
+                ws.close(reason=4003, message=reason)
+            except TypeError:
+                try:
+                    ws.close(reason=reason)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            try:
+                self.db.update_device_status(did, status="offline")
+            except Exception:
+                pass
+            closed += 1
+        return closed

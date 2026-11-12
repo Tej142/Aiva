@@ -286,6 +286,19 @@ function setupIpcHandlers() {
       store.setEncrypted('encryptedAccessToken', accessToken);
       store.setEncrypted('encryptedRefreshToken', refreshToken);
 
+      const gateState = verifyData.user && verifyData.user.gate_state ? verifyData.user.gate_state : 'active';
+      if (gateState !== 'active') {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:statusChange', { state: 'verification_required', message: 'Verification required' });
+        }
+        return {
+          status: 'success',
+          verification_required: true,
+          gate_state: gateState,
+          user: verifyData.user
+        };
+      }
+
       // 2. Register Device on Cloud
       const computerName = os.hostname() || 'Windows PC';
       const devResp = await fetch(`${serverUrl}/api/devices/register`, {
@@ -301,6 +314,17 @@ function setupIpcHandlers() {
         })
       });
       const devData = await devResp.json();
+      if (devResp.status === 403 && (devData.code === 'verification_required' || devData.code === 'approval_required')) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:statusChange', { state: 'verification_required', message: 'Verification required' });
+        }
+        return {
+          status: 'success',
+          verification_required: true,
+          gate_state: devData.gate_state || 'number_pending',
+          user: verifyData.user
+        };
+      }
       if (devData.status !== 'success') {
         return devData;
       }
@@ -599,7 +623,7 @@ function setupIpcHandlers() {
 // ---------------------------------------------------------------------
 // APP LIFECYCLE
 // ---------------------------------------------------------------------
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Grant microphone & media permissions for voice interaction
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media' || permission === 'microphone' || permission === 'audioCapture') {
@@ -676,6 +700,23 @@ app.whenReady().then(() => {
   }
 
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
+  const accessToken = store.getDecrypted('encryptedAccessToken');
+  if (accessToken || deviceToken) {
+    try {
+      const hdrs = accessToken ? { 'Authorization': `Bearer ${accessToken}` } : { 'X-Device-Token': deviceToken };
+      const meResp = await fetch(`${getServerUrl()}/api/auth/me`, { headers: hdrs });
+      const meData = await meResp.json().catch(() => ({}));
+      const gateState = meData && meData.user && meData.user.gate_state ? meData.user.gate_state : 'active';
+      if (meResp.status === 403 || gateState !== 'active') {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:statusChange', { state: 'verification_required', message: 'Verification required' });
+        }
+        return;
+      }
+    } catch {
+      // Network hiccup at startup falls back to wsClient reconnect behavior if deviceToken exists
+    }
+  }
   if (deviceToken) {
     wsClient.connect();
   }

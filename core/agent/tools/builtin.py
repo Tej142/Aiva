@@ -1,5 +1,6 @@
 """Built-in AIVA tool definitions wrapping existing capabilities, memory, research, and WhatsApp."""
 
+import inspect
 from typing import Any, Dict, Optional
 
 from core.agent.policy import RISK_CONFIRM, RISK_LOW, RISK_READ
@@ -380,30 +381,55 @@ def register_builtin_tools(
         category="action",
     ))
 
+    def _resolve_wa_contact_arg(user_id: str, raw_contact: str) -> str:
+        c = str(raw_contact or "").strip()
+        if c.lower() in ("", "last", "last_sender", "last_read_sender", "last sender", "them", "him", "her"):
+            if db is not None and hasattr(db, "get_whatsapp_last_read_sender"):
+                last_sender = db.get_whatsapp_last_read_sender(user_id)
+                if last_sender:
+                    return last_sender
+        return c
+
     # 10. whatsapp_send
     def _preflight_wa_send(args: Dict[str, Any], ctx: ToolContext) -> Optional[Dict[str, Any]]:
         if not ctx.user_id:
             return {"status": "not_found", "message": "User is not authenticated."}
+        target = _resolve_wa_contact_arg(ctx.user_id, args.get("contact", ""))
         return _sanitize_contact_resolution(
-            _resolve_whatsapp_recipient(whatsapp_service, db, ctx.user_id, args.get("contact", ""))
+            _resolve_whatsapp_recipient(whatsapp_service, db, ctx.user_id, target)
         )
 
     async def handle_wa_send(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
         err = _require_user(ctx)
         if err:
             return err
-        resolution = _resolve_whatsapp_recipient(whatsapp_service, db, ctx.user_id, args["contact"])
+        if getattr(ctx, "turn_origin", "user_explicit") != "user_explicit":
+            return {
+                "status": "blocked",
+                "error": "policy_denied_turn_origin",
+                "message": "Sending WhatsApp messages requires an explicit user turn.",
+            }
+        target = _resolve_wa_contact_arg(ctx.user_id, args.get("contact", ""))
+        if whatsapp_service and inspect.iscoroutinefunction(getattr(whatsapp_service, "send_to_contact", None)):
+            return await whatsapp_service.send_to_contact(ctx.user_id, target, args["message"])
+
+        resolution = _resolve_whatsapp_recipient(whatsapp_service, db, ctx.user_id, target)
         if resolution.get("status") != "found":
             return _sanitize_contact_resolution(resolution)
         c = resolution["contact"]
         if not whatsapp_service:
             return {"status": "error", "error": "whatsapp_unavailable", "message": "WhatsApp service is unavailable."}
-        res = await whatsapp_service.send_whatsapp_message(c["phone_e164"], args["message"], user_id=ctx.user_id)
+        try:
+            res = await whatsapp_service.send_whatsapp_message(
+                c["phone_e164"], args["message"], user_id=ctx.user_id, raw_verbatim=True
+            )
+        except TypeError:
+            res = await whatsapp_service.send_whatsapp_message(c["phone_e164"], args["message"], user_id=ctx.user_id)
         if res.get("status") == "success":
             return {
                 "status": "success",
                 "contact": c["display_name"],
-                "message": f"Sent WhatsApp message to {c['display_name']}.",
+                "message": f"Sent to {c['display_name']}: {args['message']}",
             }
         return {
             "status": "error",
@@ -413,12 +439,12 @@ def register_builtin_tools(
 
     registry.register(ToolSpec(
         name="whatsapp_send",
-        description="Send a WhatsApp text message to a saved contact (name, alias like 'dad', or 'second number'). Requires exact match; non-trusted contacts ask confirmation.",
+        description="Send a verbatim WhatsApp text message from AIVA to a saved contact (name, alias like 'dad', 'second number', or 'last_read_sender' right after reading messages). Non-trusted contacts or untrusted-tainted turns ask confirmation.",
         parameters={
             "type": "object",
             "properties": {
-                "contact": {"type": "string", "description": "Recipient name, alias, phone, or 'second number'."},
-                "message": {"type": "string", "description": "Message body to send."},
+                "contact": {"type": "string", "description": "Recipient name, alias, phone, 'second number', or 'last_read_sender'."},
+                "message": {"type": "string", "description": "Verbatim message body to send."},
             },
             "required": ["contact", "message"],
         },
@@ -485,6 +511,8 @@ def register_builtin_tools(
         err = _require_user(ctx)
         if err:
             return err
+        if getattr(ctx, "turn_origin", "user_explicit") != "user_explicit":
+            return {"status": "blocked", "error": "policy_denied_turn_origin", "message": "WhatsApp reads require an explicit user turn."}
         contact = (args.get("contact") or "").strip() or None
         unread_only = bool(args.get("unread_only", False))
         hours_back = args.get("hours_back")
@@ -551,6 +579,8 @@ def register_builtin_tools(
         err = _require_user(ctx)
         if err:
             return err
+        if getattr(ctx, "turn_origin", "user_explicit") != "user_explicit":
+            return {"status": "blocked", "error": "policy_denied_turn_origin", "message": "WhatsApp search requires an explicit user turn."}
         query = args["query"]
         contact = (args.get("contact") or "").strip() or None
         hours_back = args.get("hours_back")
@@ -604,6 +634,128 @@ def register_builtin_tools(
         timeout_s=8.0,
         untrusted_result=True,
         parallel_safe=True,
+        category="action",
+    ))
+
+    # 10d. whatsapp_inbox_status (metadata counts only, zero bodies exposed)
+    async def handle_wa_inbox_status(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+        err = _require_user(ctx)
+        if err:
+            return err
+        turn_origin = getattr(ctx, "turn_origin", "user_explicit")
+        if turn_origin != "user_explicit":
+            return {"status": "blocked", "error": "policy_denied_turn_origin", "message": "Inbox status requires an explicit user turn."}
+        sender = (args.get("sender") or "").strip() or None
+        if whatsapp_service and hasattr(whatsapp_service, "get_inbox_status"):
+            return whatsapp_service.get_inbox_status(ctx.user_id, sender=sender, turn_origin=turn_origin)
+        if db is not None and hasattr(db, "get_whatsapp_inbox_unread_summary"):
+            return {"status": "success", **db.get_whatsapp_inbox_unread_summary(ctx.user_id, sender_filter=sender)}
+        return {"status": "error", "error": "whatsapp_unavailable", "message": "WhatsApp service unavailable."}
+
+    registry.register(ToolSpec(
+        name="whatsapp_inbox_status",
+        description="Get metadata-only counts of unread inbound WhatsApp messages grouped by sender (never exposes or marks messages read). Use for 'do I have new messages' or 'who texted me'.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "sender": {"type": "string", "description": "Optional sender name or phone filter."},
+            },
+        },
+        handler=handle_wa_inbox_status,
+        risk=RISK_READ,
+        allowed_channels=("hud", "voice", "whatsapp"),
+        timeout_s=6.0,
+        untrusted_result=False,
+        parallel_safe=True,
+        category="action",
+    ))
+
+    # 10e. whatsapp_read_messages (third-party inbox read, lazy Whisper voice transcribe, post-read receipt, untrusted)
+    async def handle_wa_read_messages(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+        err = _require_user(ctx)
+        if err:
+            return err
+        turn_origin = getattr(ctx, "turn_origin", "user_explicit")
+        if turn_origin != "user_explicit":
+            return {"status": "blocked", "error": "policy_denied_turn_origin", "message": "Reading third-party WhatsApp messages requires an explicit user request."}
+        if not whatsapp_service or not inspect.iscoroutinefunction(getattr(whatsapp_service, "read_inbox_messages", None)):
+            return await handle_wa_read(args, ctx)
+        return await whatsapp_service.read_inbox_messages(
+            ctx.user_id,
+            contact=(args.get("contact") or "").strip() or None,
+            unread_only=bool(args.get("unread_only", True)),
+            hours_back=args.get("hours_back"),
+            limit=int(args.get("limit", 15)),
+            include_voice_transcript=bool(args.get("include_voice_transcript", True)),
+            mark_read=bool(args.get("mark_read", True)),
+            turn_origin=turn_origin,
+        )
+
+    registry.register(ToolSpec(
+        name="whatsapp_read_messages",
+        description="Read third-party inbound WhatsApp messages (with on-demand voice transcription and post-read receipts). Content is untrusted external data.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Optional sender contact name, alias, or phone."},
+                "unread_only": {"type": "boolean", "description": "Default true; set false to inspect previously read inbox messages."},
+                "hours_back": {"type": "integer", "minimum": 1, "maximum": 720},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                "include_voice_transcript": {"type": "boolean", "description": "Transcribe unread voice notes on demand (default true)."},
+                "mark_read": {"type": "boolean", "description": "Mark returned messages read and send receipt after read succeeds (default true)."},
+            },
+        },
+        handler=handle_wa_read_messages,
+        risk=RISK_READ,
+        allowed_channels=("hud", "voice", "whatsapp"),
+        timeout_s=20.0,
+        untrusted_result=True,
+        parallel_safe=False,
+        category="action",
+    ))
+
+    # 10f. whatsapp_contact_preference (mute/unmute/priority/unpriority)
+    async def handle_wa_contact_pref(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+        err = _require_user(ctx)
+        if err:
+            return err
+        if getattr(ctx, "turn_origin", "user_explicit") != "user_explicit":
+            return {"status": "blocked", "error": "policy_denied_turn_origin", "message": "Updating contact preferences requires an explicit user turn."}
+        action = str(args.get("action") or "").strip().lower()
+        contact_q = str(args.get("contact") or "").strip()
+        notify_inbound = True if action == "unmute" else (False if action == "mute" else None)
+        priority = True if action == "priority" else (False if action == "unpriority" else None)
+        if notify_inbound is None and priority is None:
+            return {"status": "error", "error": "invalid_action", "message": "Action must be mute, unmute, priority, or unpriority."}
+        if whatsapp_service and hasattr(whatsapp_service, "update_contact_preference"):
+            res = whatsapp_service.update_contact_preference(
+                ctx.user_id,
+                contact_q,
+                notify_inbound=notify_inbound,
+                priority=priority,
+            )
+            if res.get("status") == "updated":
+                cname = (res.get("contact") or {}).get("display_name") or contact_q
+                return {"status": "success", "contact": cname, "action": action, "message": f"Updated notification preference ({action}) for {cname}."}
+            return res
+        return {"status": "error", "error": "whatsapp_unavailable", "message": "WhatsApp service unavailable."}
+
+    registry.register(ToolSpec(
+        name="whatsapp_contact_preference",
+        description="Mute or unmute inbound WhatsApp notifications for a contact, or toggle priority status (bypasses quiet hours).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Saved contact name or alias."},
+                "action": {"type": "string", "enum": ["mute", "unmute", "priority", "unpriority"]},
+            },
+            "required": ["contact", "action"],
+        },
+        handler=handle_wa_contact_pref,
+        risk=RISK_LOW,
+        allowed_channels=("hud", "voice", "whatsapp"),
+        timeout_s=6.0,
+        parallel_safe=False,
         category="action",
     ))
 

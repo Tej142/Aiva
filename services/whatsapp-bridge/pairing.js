@@ -231,9 +231,26 @@ export function createPairingManager({ authDir, logger, onBeforeStart, onPaired,
 
         const registered = Boolean(currentSock?.authState?.creds?.registered);
         const rawJid = currentSock?.user?.id || '';
-        const pairedDigits = rawJid ? rawJid.split(':')[0].split('@')[0] : '';
+        const pairedDigits = rawJid ? rawJid.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
 
         if (!registered && !pairedDigits) {
+          return;
+        }
+
+        const expectedDigits = (process.env.AIVA_WHATSAPP_NUMBER || '').replace(/\D/g, '');
+        if (expectedDigits && pairedDigits && pairedDigits !== expectedDigits) {
+          clearTimers();
+          try { await currentSock?.logout?.(); } catch (_) {}
+          closePairingSocket();
+          clearAuthDirectory(authDir);
+          emitState({
+            active: false,
+            phase: 'error',
+            qr: null,
+            qr_data_url: null,
+            pairing_code: null,
+            error: `Paired account (${maskPhone(pairedDigits)}) does not match AIVA_WHATSAPP_NUMBER (${maskPhone(expectedDigits)}). Scan with AIVA's dedicated account.`
+          });
           return;
         }
 

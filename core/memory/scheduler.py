@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+import inspect
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -151,7 +152,20 @@ class MemoryScheduler:
         delivered = False
         if channel == "whatsapp" and self.whatsapp_deliver:
             try:
-                res = self.whatsapp_deliver(user_id, text)
+                urgency = "urgent" if bool(getattr(reminder, "urgent", False)) else "normal"
+                accepts_urgency = False
+                try:
+                    sig = inspect.signature(self.whatsapp_deliver)
+                    accepts_urgency = (
+                        "urgency" in sig.parameters
+                        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                    )
+                except (TypeError, ValueError):
+                    accepts_urgency = False
+                if accepts_urgency:
+                    res = self.whatsapp_deliver(user_id, text, urgency=urgency)
+                else:
+                    res = self.whatsapp_deliver(user_id, text)
                 if asyncio.iscoroutine(res):
                     try:
                         loop = asyncio.get_running_loop()

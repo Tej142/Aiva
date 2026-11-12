@@ -19,7 +19,7 @@ _CANCEL_PHRASES = frozenset({
 _INJECTION_PATTERNS = (
     re.compile(r"(?i)ignore\s+(?:all\s+)?previous\s+instructions"),
     re.compile(r"(?i)disregard\s+(?:the\s+)?system\s+prompt"),
-    re.compile(r"(?i)</?\s*(?:identity|system|assistant|tool_result|memory)\b[^>]*>"),
+    re.compile(r"(?i)</?\s*(?:identity|system|assistant|tool_result|memory|whatsapp_message)\b[^>]*>"),
     re.compile(r"<\|(?:im_start|im_end|system|user|assistant)\|>"),
 )
 
@@ -77,13 +77,43 @@ class RiskDecision:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+_TURN_ORIGIN_EXPLICIT_TOOLS = frozenset({
+    "whatsapp_read",
+    "whatsapp_inbox_status",
+    "whatsapp_read_messages",
+    "whatsapp_send",
+    "whatsapp_contact_preference",
+    "open_apps_urls",
+    "media_volume",
+    "keyboard_input",
+    "screenshot",
+    "power_control",
+    "file_access",
+    "browser_actions",
+    "create_reminder",
+})
+
+_TAINT_PROTECTED_ACTION_TOOLS = frozenset({
+    "whatsapp_send",
+    "open_apps_urls",
+    "media_volume",
+    "keyboard_input",
+    "screenshot",
+    "power_control",
+    "file_access",
+    "browser_actions",
+    "create_reminder",
+    "whatsapp_contact_preference",
+})
+
+
 def evaluate_tool_risk(
     spec: Any,
     args: Dict[str, Any],
     ctx: Any,
     preflight: Optional[Dict[str, Any]] = None,
 ) -> RiskDecision:
-    """Evaluate channel allowlists, confirmation rules, and contact trust before executing a tool."""
+    """Evaluate channel allowlists, confirmation rules, untrusted taint, and contact trust before executing a tool."""
     chan = (getattr(ctx, "channel", "hud") or "hud").lower()
     allowed_channels = tuple(getattr(spec, "allowed_channels", ("hud", "voice", "whatsapp")))
     if chan not in allowed_channels:
@@ -94,7 +124,50 @@ def evaluate_tool_risk(
             blocked_message=f"'{spec.name}' is disabled on the {chan} channel for security.",
         )
 
+    turn_origin = (getattr(ctx, "turn_origin", "user_explicit") or "user_explicit").strip().lower()
+    if spec.name in _TURN_ORIGIN_EXPLICIT_TOOLS and turn_origin != "user_explicit":
+        return RiskDecision(
+            allowed=False,
+            risk_level=RISK_CONFIRM,
+            reason="turn_origin_blocked",
+            blocked_message=(
+                f"'{spec.name}' requires an explicit user request and cannot run from '{turn_origin}'."
+            ),
+        )
+
     confirmed = bool(getattr(ctx, "confirmed", False))
+    untrusted_taint = bool(getattr(ctx, "untrusted_taint", False))
+
+    if spec.name == "whatsapp_send" and preflight is not None:
+        status = preflight.get("status")
+        if status == "not_found":
+            return RiskDecision(
+                allowed=False,
+                risk_level=RISK_CONFIRM,
+                reason="contact_not_found",
+                blocked_message=preflight.get("message") or "Contact not found in your WhatsApp contacts.",
+            )
+        if status == "ambiguous":
+            return RiskDecision(
+                allowed=False,
+                risk_level=RISK_CONFIRM,
+                reason="contact_ambiguous",
+                blocked_message=preflight.get("message") or "Multiple matching contacts found. Which one did you mean?",
+                extra={"matches": preflight.get("matches") or []},
+            )
+
+    if untrusted_taint and spec.name in _TAINT_PROTECTED_ACTION_TOOLS and not confirmed:
+        return RiskDecision(
+            allowed=False,
+            risk_level=RISK_CONFIRM,
+            requires_confirmation=True,
+            reason="untrusted_taint_confirmation",
+            action_label=spec.name,
+            confirmation_prompt=(
+                f"Untrusted external content was read in this conversation. "
+                f"Please say 'confirm' to execute {spec.name}, or 'cancel' to abort."
+            ),
+        )
 
     # Power control: lock is low-risk; shutdown/restart/sleep/hibernate require explicit confirm
     if spec.name == "power_control":

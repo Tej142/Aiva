@@ -326,6 +326,24 @@ class _GoldenEvalStubLLM:
             target = "mom" if "mom" in low else ("dad" if "dad" in low else "GhostUser")
             return LLMResponse(tool_calls=[LLMToolCall(id="tc_wal", name="whatsapp_lookup_contact", arguments={"query": target})])
 
+        # WhatsApp contact notification/priority preferences
+        if ("mute " in low or "unmute " in low or "priority" in low) and "whatsapp" in low:
+            target = self._extract_recipient(low)
+            act = "unmute" if "unmute" in low else ("mute" if "mute" in low else ("unpriority" if "remove priority" in low else "priority"))
+            return LLMResponse(tool_calls=[LLMToolCall(id="tc_wapref", name="whatsapp_contact_preference", arguments={"contact": target, "action": act})])
+
+        # WhatsApp metadata-only inbox summary
+        if ("who texted" in low or "inbox count" in low or "inbox summary" in low) and "whatsapp" in low:
+            return LLMResponse(tool_calls=[LLMToolCall(id="tc_wainb", name="whatsapp_inbox_status", arguments={})])
+
+        # WhatsApp third-party inbox read (explicit)
+        if "inbox messages" in low or "third-party whatsapp" in low:
+            recipient = self._extract_recipient(low)
+            args = {"unread_only": "unread" in low}
+            if recipient != "Unknown":
+                args["contact"] = recipient
+            return LLMResponse(tool_calls=[LLMToolCall(id="tc_warm", name="whatsapp_read_messages", arguments=args)])
+
         # WhatsApp read & search (Phase 2) - check before multi-step web search or whatsapp_send
         wa_read_triggers = (
             "unread" in low
@@ -424,6 +442,16 @@ class _GoldenEvalStubLLM:
         m_msg = re.findall(r'"message":\s*"([^"]+)"', tool_block)
         if "ambiguous" in tool_block:
             return m_msg[-1] if m_msg else "Multiple matching contacts found. Which one do you mean?"
+        if 'name="whatsapp_inbox_status"' in tool_block:
+            cnt = re.search(r'"unread_total":\s*(\d+)', tool_block)
+            senders = re.findall(r'"sender_name":\s*"([^"]+)"', tool_block)
+            return f"Inbox has {cnt.group(1) if cnt else 0} unread message(s)" + (f" from {', '.join(senders)}." if senders else ".")
+        if 'name="whatsapp_read_messages"' in tool_block:
+            if m_msg:
+                return m_msg[-1]
+            return "No third-party WhatsApp inbox messages found."
+        if 'name="whatsapp_contact_preference"' in tool_block and m_msg:
+            return m_msg[-1]
         if 'name="whatsapp_read"' in tool_block or 'name="whatsapp_search"' in tool_block:
             if '"status": "empty"' in tool_block or '"status": "not_found"' in tool_block:
                 return m_msg[-1] if m_msg else "No matching WhatsApp messages found."
@@ -444,9 +472,9 @@ class _GoldenEvalStubLLM:
             return m_msg[-1] if m_msg else "That action is blocked on this channel."
         if "My Second Number" in tool_block and '"status": "success"' in tool_block:
             return "Found results and sent the summary to My Second Number."
-        if "Sent WhatsApp message to " in tool_block:
+        if "Sent WhatsApp message to " in tool_block or "Sent to " in tool_block:
             for m in m_msg:
-                if "Sent WhatsApp message to " in m:
+                if "Sent WhatsApp message to " in m or m.startswith("Sent to "):
                     return m
         if 'name="whatsapp_lookup_contact"' in tool_block:
             m_name = re.search(r'"display_name":\s*"([^"]+)"', tool_block)
@@ -541,6 +569,24 @@ async def run_eval_async(
         cases = sampled
 
     tmpdir = tempfile.mkdtemp(prefix="aiva_eval_")
+    eval_env_path = os.path.join(tmpdir, ".env.eval")
+    with open(eval_env_path, "w", encoding="utf-8") as ef:
+        ef.write(
+            "AIVA_ADMIN_EMAIL=charan@example.com\n"
+            "AIVA_WHATSAPP_NUMBER=919000099999\n"
+            "AIVA_USER_CAN_SEND_WHATSAPP=false\n"
+        )
+    _env_keys = ("AIVA_ENV_FILE", "AIVA_ADMIN_EMAIL", "AIVA_WHATSAPP_NUMBER")
+    _saved_env = {k: os.environ.get(k) for k in _env_keys}
+    os.environ["AIVA_ENV_FILE"] = eval_env_path
+    os.environ["AIVA_ADMIN_EMAIL"] = "charan@example.com"
+    os.environ["AIVA_WHATSAPP_NUMBER"] = "919000099999"
+    try:
+        from services.whatsapp_config import clear_dotenv_cache
+        clear_dotenv_cache()
+    except Exception:
+        pass
+
     db_path = os.path.join(tmpdir, "eval.db")
     db = DatabaseService(db_path=db_path)
     mem = MemoryEngine(db=db, start_worker=False)
@@ -549,10 +595,11 @@ async def run_eval_async(
     now = time.time()
     conn = db.get_connection()
     conn.execute(
-        "INSERT INTO users (id, email, name, onboarded, created_at, is_active) VALUES (?, ?, ?, 1, ?, 1)",
+        "INSERT INTO users (id, email, name, onboarded, created_at, is_active, gate_state) VALUES (?, ?, ?, 1, ?, 1, 'active')",
         (uid, "charan@example.com", "Charan", now),
     )
     conn.commit()
+    db.upsert_verified_whatsapp_link(uid, "+919000011111", verified_by_epoch=1, session_state="ACTIVE")
 
     # Reclassified language attribute in memory should never make AIVA greet as "Telugu"
     mem.store.insert_memory(
@@ -609,12 +656,27 @@ async def run_eval_async(
             is_read=wread,
             msg_timestamp=now - age_s,
         )
+        if wdir == "inbound" and hasattr(db, "insert_whatsapp_inbox_message"):
+            db.insert_whatsapp_inbox_message(
+                user_id=uid,
+                contact_id=None,
+                sender_e164=wphone,
+                sender_name=wname,
+                message_id=wid,
+                received_at=now - age_s,
+                kind="text",
+                body=wtext,
+                media_ref="",
+                filename="",
+                mime_type="text/plain",
+                status="read" if wread else "unread",
+            )
 
     spies = _SpyCapabilities()
     wa_dispatches: List[Tuple[str, str]] = []
     wa_svc = WhatsAppService(db=db, kernel=None)
 
-    async def _mock_send_whatsapp(phone_e164: str, text: str, user_id: Optional[str] = None):
+    async def _mock_send_whatsapp(phone_e164: str, text: str, user_id: Optional[str] = None, raw_verbatim: bool = False):
         wa_dispatches.append((phone_e164, text))
         return {"status": "success", "phone_e164": phone_e164}
 
@@ -696,6 +758,16 @@ async def run_eval_async(
         except Exception:
             pass
         shutil.rmtree(tmpdir, ignore_errors=True)
+        for k, v in _saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        try:
+            from services.whatsapp_config import clear_dotenv_cache
+            clear_dotenv_cache()
+        except Exception:
+            pass
 
     passed_n = sum(1 for r in results if r["passed"])
     total_n = len(results)

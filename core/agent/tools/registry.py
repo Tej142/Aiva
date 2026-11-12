@@ -20,6 +20,7 @@ class ToolContext:
     session_id: str = "default"
     confirmed: bool = False
     untrusted_taint: bool = False
+    turn_origin: str = "user_explicit"
     device_name: Optional[str] = None
     kernel: Any = None
 

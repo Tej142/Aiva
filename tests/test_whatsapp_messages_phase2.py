@@ -17,6 +17,7 @@ from core.agent.tools.registry import ToolContext, ToolRegistry
 from core.memory import MemoryEngine
 from services.auth_service import AuthService
 from services.database_service import DatabaseService
+from services.whatsapp_config import clear_dotenv_cache
 from services.whatsapp_service import WhatsAppService
 
 
@@ -38,16 +39,31 @@ class _FakeUrlopenResp:
 class TestWhatsAppMessagesPhase2(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="aiva_wa_p2_")
+        self.env_path = os.path.join(self.tmpdir, ".env")
+        self._old_env_file = os.environ.get("AIVA_ENV_FILE")
+        with open(self.env_path, "w", encoding="utf-8") as f:
+            f.write(
+                "AIVA_WHATSAPP_NUMBER=919000000000\n"
+                "AIVA_ADMIN_EMAIL=charan@example.com\n"
+                "WHATSAPP_BRIDGE_SECRET=test-bridge-secret\n"
+                "AIVA_ACCESS_EPOCH=1\n"
+            )
+        os.environ["AIVA_ENV_FILE"] = self.env_path
+        clear_dotenv_cache()
+
         self.db_path = os.path.join(self.tmpdir, "test_p2.db")
         self.db = DatabaseService(db_path=self.db_path)
         self.auth = AuthService(db=self.db)
         self.memory = MemoryEngine(db=self.db, start_worker=False)
         self.wa = WhatsAppService(db=self.db, kernel=None)
+        aiva_server.invalidate_user_gate_cache()
 
         self.uid_a = "user_charan_p2"
         self.uid_b = "user_other_p2"
         self.db.create_user(self.uid_a, "charan@example.com", name="Charan", onboarded=1)
         self.db.create_user(self.uid_b, "bob@example.com", name="Bob", onboarded=1)
+        self.db.set_user_gate_state(self.uid_a, "active", access_epoch=1)
+        self.db.set_user_gate_state(self.uid_b, "active", access_epoch=1)
         self.tokens_a = self.auth.generate_tokens(self.uid_a, "charan@example.com")
         self.tokens_b = self.auth.generate_tokens(self.uid_b, "bob@example.com")
 
@@ -71,6 +87,12 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
         )
 
     def tearDown(self):
+        aiva_server.invalidate_user_gate_cache()
+        if self._old_env_file is None:
+            os.environ.pop("AIVA_ENV_FILE", None)
+        else:
+            os.environ["AIVA_ENV_FILE"] = self._old_env_file
+        clear_dotenv_cache()
         try:
             self.memory.shutdown()
         except Exception:
@@ -231,24 +253,28 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
         self.assertEqual(res_b["count"], 0)
 
     def test_outbound_send_archives_message_and_saved_contact_inbound_silently_archives(self):
-        # Set User A as the single verified WhatsApp bridge owner
-        self.db.create_or_update_whatsapp_link(self.uid_a, "919900112233", "123456", time.time() + 600)
-        self.db.verify_whatsapp_link("919900112233", "123456")
+        # Set User A as verified active WhatsApp user
+        self.db.upsert_verified_whatsapp_link(self.uid_a, "919900112233", verified_by_epoch=1, session_state="ACTIVE")
+        self.db.set_user_gate_state(self.uid_a, "active", access_epoch=1)
 
-        with patch("urllib.request.urlopen", lambda req, timeout=10.0: _FakeUrlopenResp()):
+        posted_bodies = []
+
+        def _capture_urlopen(req, timeout=10.0):
+            import json as _json
+            posted_bodies.append(_json.loads(req.data.decode("utf-8")))
+            return _FakeUrlopenResp()
+
+        with patch("urllib.request.urlopen", _capture_urlopen):
             send_res = asyncio.run(
-                self.wa.send_whatsapp_message("919876540001", "I will reach in 20 mins", user_id=self.uid_a)
+                self.wa.send_to_contact(self.uid_a, "Dad", "I will reach in 20 mins")
             )
         self.assertEqual(send_res["status"], "success")
-        out_msgs = self.db.get_whatsapp_messages(self.uid_a, peer_phone="919876540001")
-        self.assertEqual(len(out_msgs), 1)
-        self.assertEqual(out_msgs[0]["direction"], "outbound")
-        self.assertEqual(out_msgs[0]["text"], "I will reach in 20 mins")
+        self.assertEqual(len(posted_bodies), 1)
+        self.assertEqual(posted_bodies[0]["text"], "I will reach in 20 mins")
 
         # Saved contact (Mom) sends an inbound message directly to AIVA device number:
-        # Must archive silently WITHOUT replying with an "unlinked" error!
-        with patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "charan@example.com"), \
-             patch.object(self.wa, "send_whatsapp_message") as mock_send:
+        # Must capture silently in whatsapp_inbox WITHOUT replying with an "unlinked" error!
+        with patch.object(self.wa, "send_whatsapp_message") as mock_send:
             in_res = asyncio.run(
                 self.wa.handle_inbound(
                     {
@@ -260,16 +286,16 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
                     }
                 )
             )
-            self.assertEqual(in_res["status"], "archived_contact_message")
+            self.assertEqual(in_res["status"], "captured_inbox")
             mock_send.assert_not_called()
 
-        mom_msgs = self.db.get_whatsapp_messages(self.uid_a, peer_phone="919876540002")
+        mom_msgs = self.db.read_whatsapp_inbox_messages(self.uid_a, sender_e164="919876540002")
         self.assertEqual(len(mom_msgs), 1)
-        self.assertEqual(mom_msgs[0]["text"], "Dinner is ready")
+        self.assertEqual(mom_msgs[0]["body"], "Dinner is ready")
+        self.assertEqual(self.db.read_whatsapp_inbox_messages(self.uid_b, sender_e164="919876540002"), [])
 
-        # Unknown unsaved caller still gets ignored_unlinked safely
-        with patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "charan@example.com"), \
-             patch.object(self.wa, "send_whatsapp_message") as mock_send2:
+        # Unknown unsaved caller is silently dropped with no reply and no storage
+        with patch.object(self.wa, "send_whatsapp_message") as mock_send2:
             unk_res = asyncio.run(
                 self.wa.handle_inbound(
                     {
@@ -279,13 +305,14 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
                     }
                 )
             )
-            self.assertEqual(unk_res["status"], "ignored_unlinked")
-            # Does not store unknown caller into User A inbox
-            self.assertEqual(self.db.get_whatsapp_messages(self.uid_a, peer_phone="917777777777"), [])
+            self.assertEqual(unk_res["status"], "dropped_unknown_sender")
+            mock_send2.assert_not_called()
+            self.assertEqual(self.db.read_whatsapp_inbox_messages(self.uid_a, sender_e164="917777777777"), [])
 
     def test_http_endpoints_isolation_and_internal_bridge_archive_guard(self):
-        self.db.create_or_update_whatsapp_link(self.uid_a, "919900112233", "123456", time.time() + 600)
-        self.db.verify_whatsapp_link("919900112233", "123456")
+        self.db.upsert_verified_whatsapp_link(self.uid_a, "919900112233", verified_by_epoch=1)
+        self.db.upsert_verified_whatsapp_link(self.uid_b, "919900112244", verified_by_epoch=1)
+        aiva_server.invalidate_user_gate_cache()
         self.db.store_whatsapp_message(
             self.uid_a,
             peer_phone="919876540001",
@@ -301,9 +328,7 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
 
         with patch.object(aiva_server, "db", self.db), \
              patch.object(aiva_server, "auth_service", self.auth), \
-             patch.object(aiva_server, "kernel", fake_kernel), \
-             patch("services.whatsapp_service.WHATSAPP_OWNER_EMAIL", "charan@example.com"), \
-             patch("services.whatsapp_service.WHATSAPP_BRIDGE_SECRET", "test-bridge-secret"):
+             patch.object(aiva_server, "kernel", fake_kernel):
             client = aiva_server.app.test_client()
 
             # Unauthenticated /api/whatsapp/messages -> 401 (even if a companion device is connected!)
@@ -351,7 +376,7 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
             )
             self.assertEqual(bad_bridge.status_code, 401)
 
-            # Valid bridge secret archives batch cleanly for bridge owner
+            # Valid bridge secret handles endpoint cleanly via backward-compatible shim
             good_bridge = client.post(
                 "/internal/whatsapp/archive",
                 json={
@@ -368,27 +393,7 @@ class TestWhatsAppMessagesPhase2(unittest.TestCase):
                 headers={"X-Bridge-Secret": "test-bridge-secret"},
             )
             self.assertEqual(good_bridge.status_code, 200)
-            self.assertEqual(good_bridge.get_json()["stored"], 1)
-
-            # Dedupe repeat batch and verify User A sees it while User B does not
-            dup_bridge = client.post(
-                "/internal/whatsapp/archive",
-                json={
-                    "messages": [
-                        {
-                            "peer_phone": "919876540002",
-                            "peer_name": "Mom",
-                            "direction": "outbound",
-                            "text": "Sent via phone",
-                            "message_id": "wa_hist_1",
-                        }
-                    ]
-                },
-                headers={"X-Bridge-Secret": "test-bridge-secret"},
-            )
-            self.assertEqual(dup_bridge.status_code, 200)
-            self.assertEqual(dup_bridge.get_json()["stored"], 1)  # upsert/dedupe returns existing record cleanly
-            self.assertEqual(len(self.db.get_whatsapp_messages(self.uid_a, peer_phone="919876540002")), 1)
+            self.assertEqual(good_bridge.get_json()["status"], "ok")
             self.assertEqual(self.db.get_whatsapp_messages(self.uid_b, peer_phone="919876540002"), [])
 
     def test_prompt_injection_in_whatsapp_message_fenced_and_never_executes_and_no_pii_logged(self):

@@ -39,6 +39,7 @@ class InputHandler:
         user_id: Optional[str] = None,
         channel: str = "voice",
         session_id: str = "default",
+        turn_origin: str = "user_explicit",
     ):
         user_input = (user_input or "").strip()
         uid = self._resolve_uid(user_id)
@@ -66,6 +67,7 @@ class InputHandler:
                 user_id=uid,
                 channel=channel,
                 session_id=session_id,
+                turn_origin=turn_origin,
             )
             spoken = res.get("speech_text") or res.get("response") or ""
             if speak and spoken and self.voice_service:

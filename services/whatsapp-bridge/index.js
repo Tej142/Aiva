@@ -61,6 +61,7 @@ let pairedPhone = '';
 let reconnectAttempts = 0;
 const sentMessageIds = new Set();
 const messageStore = new Map(); // id -> proto.IMessage for decryption retry
+const mediaMsgStore = new Map(); // id -> full WAMessage for lazy /media/download
 let _pairingManagerPromise = null;
 
 async function getPairingManager() {
@@ -229,24 +230,25 @@ async function connectToWhatsApp() {
 
       // Extract paired phone number
       const fullJid = sock.user?.id || '';
-      pairedPhone = fullJid.split(':')[0].replace(/\D/g, '');
+      pairedPhone = fullJid.split(':')[0].split('@')[0].replace(/\D/g, '');
 
-      console.log(`[WhatsAppBridge] ✅ Connected to WhatsApp as +${pairedPhone}`);
+      console.log(`[WhatsAppBridge] ✅ Connected to WhatsApp as ${maskPeer(pairedPhone)}`);
 
-      // Verify connected phone matches AIVA_WHATSAPP_NUMBER if configured
-      if (AIVA_WHATSAPP_NUMBER && pairedPhone && pairedPhone !== AIVA_WHATSAPP_NUMBER) {
+      // Enforce AIVA_WHATSAPP_NUMBER identity invariant: bridge only runs AIVA's own account
+      if (AIVA_WHATSAPP_NUMBER && (!pairedPhone || pairedPhone !== AIVA_WHATSAPP_NUMBER)) {
         console.error(
-          `[WhatsAppBridge] ❌ SECURITY ERROR: Paired number (+${pairedPhone}) does not match AIVA_WHATSAPP_NUMBER (+${AIVA_WHATSAPP_NUMBER})! Terminating.`
+          `[WhatsAppBridge] ❌ SECURITY ERROR: Paired number (${maskPeer(pairedPhone)}) does not match AIVA_WHATSAPP_NUMBER (${maskPeer(AIVA_WHATSAPP_NUMBER)})! Refusing to run.`
         );
+        try { sock?.ws?.close?.(); } catch (_) {}
         process.exit(1);
       }
     }
   });
 
-  // Extract text / caption + media type cleanly
+  // Extract text / caption + media metadata ONLY (never eager-download media)
   function extractMessageMeta(m) {
     const msg = m?.message || {};
-    const inner = msg.ephemeralMessage?.message || msg.viewOnceMessage?.message || msg;
+    const inner = msg.ephemeralMessage?.message || msg.viewOnceMessage?.message || msg.viewOnceMessageV2?.message || msg;
     const text = (
       inner.conversation ||
       inner.extendedTextMessage?.text ||
@@ -256,151 +258,119 @@ async function connectToWhatsApp() {
       ''
     ).trim();
     let mediaType = 'text';
-    if (inner.audioMessage) mediaType = 'audio';
-    else if (inner.imageMessage) mediaType = 'image';
-    else if (inner.videoMessage) mediaType = 'video';
-    else if (inner.documentMessage || inner.documentWithCaptionMessage) mediaType = 'document';
-    return { text, mediaType, rawInner: inner };
+    let mediaMime = '';
+    let mediaFilename = '';
+    let mediaSeconds = 0;
+
+    if (inner.audioMessage) {
+      mediaType = 'audio';
+      mediaMime = inner.audioMessage.mimetype || 'audio/ogg';
+      mediaSeconds = Number(inner.audioMessage.seconds || 0);
+    } else if (inner.imageMessage) {
+      mediaType = 'image';
+      mediaMime = inner.imageMessage.mimetype || 'image/jpeg';
+    } else if (inner.videoMessage) {
+      mediaType = 'video';
+      mediaMime = inner.videoMessage.mimetype || 'video/mp4';
+      mediaSeconds = Number(inner.videoMessage.seconds || 0);
+    } else if (inner.documentMessage || inner.documentWithCaptionMessage) {
+      mediaType = 'document';
+      const docMsg = inner.documentMessage || inner.documentWithCaptionMessage?.message?.documentMessage || {};
+      mediaMime = docMsg.mimetype || 'application/octet-stream';
+      mediaFilename = docMsg.fileName || '';
+    }
+    return { text, mediaType, mediaMime, mediaFilename, mediaSeconds, rawInner: inner };
   }
 
-  function resolvePeerInfo(m) {
+  async function resolvePeerInfo(m) {
     const remoteJid = m?.key?.remoteJid || '';
     const altJid = m?.key?.remoteJidAlt || m?.key?.senderPn || m?.key?.participantPn || '';
     const ownLid = (sock?.user?.lid || '').split('@')[0].split(':')[0];
-    const ownPhone = (sock?.user?.id || '').split('@')[0].split(':')[0] || AIVA_WHATSAPP_NUMBER;
+    const ownPhone = (sock?.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '') || AIVA_WHATSAPP_NUMBER;
     const remoteDigits = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
-    const altDigits = String(altJid).split('@')[0].split(':')[0].replace(/\D/g, '');
-    const peerDigits = (!remoteJid.endsWith('@lid') ? remoteDigits : (altDigits || remoteDigits));
-    const isSelfChat = (
-      peerDigits === ownPhone ||
-      (ownLid && remoteDigits === ownLid) ||
-      (Boolean(m?.key?.fromMe) && remoteJid.endsWith('@lid') && !altDigits)
-    );
-    return { remoteJid, ownPhone, peerDigits, isSelfChat };
+    let altDigits = String(altJid).split('@')[0].split(':')[0].replace(/\D/g, '');
+    const lidJid = remoteJid.endsWith('@lid') ? remoteJid : (String(altJid).endsWith('@lid') ? String(altJid) : '');
+
+    if (remoteJid.endsWith('@lid') && !altDigits && sock?.signalRepository?.lidMapping?.getPNForLID) {
+      try {
+        const pn = await sock.signalRepository.lidMapping.getPNForLID(remoteJid);
+        if (pn) {
+          altDigits = String(pn).split('@')[0].split(':')[0].replace(/\D/g, '');
+        }
+      } catch (_) {}
+    }
+
+    const peerDigits = (!remoteJid.endsWith('@lid') ? remoteDigits : (altDigits || ''));
+    const isOwnAccount = Boolean(m?.key?.fromMe) ||
+      Boolean(ownPhone && peerDigits && peerDigits === ownPhone) ||
+      Boolean(ownLid && remoteDigits && remoteDigits === ownLid);
+
+    return { remoteJid, ownPhone, ownLid, peerDigits, lidJid, isOwnAccount };
   }
 
   function maskPeer(digits) {
     const clean = String(digits || '').replace(/\D/g, '');
-    return clean.length > 4 ? `+***${clean.slice(-4)}` : '****';
+    return clean.length > 4 ? `+${'*'.repeat(clean.length - 4)}${clean.slice(-4)}` : '****';
   }
 
-  function toArchiveItem(m, meta, info) {
-    return {
-      message_id: m?.key?.id || '',
-      chat_jid: info.remoteJid,
-      peer_phone: info.peerDigits,
-      push_name: (m?.pushName || '').trim(),
-      text: meta.text,
-      media_type: meta.mediaType,
-      direction: m?.key?.fromMe ? 'outbound' : 'inbound',
-      from_me: Boolean(m?.key?.fromMe),
-      timestamp: Number(m?.messageTimestamp || Math.floor(Date.now() / 1000)),
-    };
-  }
-
-  sock.ev.on('messaging-history.set', async ({ messages }) => {
-    const batch = [];
-    for (const m of (messages || [])) {
-      if (!m?.message) continue;
-      const remoteJid = m.key?.remoteJid || '';
-      if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') continue;
-      if (sentMessageIds.has(m.key?.id)) continue;
-      const info = resolvePeerInfo(m);
-      if (info.isSelfChat || !info.peerDigits) continue;
-      const meta = extractMessageMeta(m);
-      if (!meta.text) continue;
-      batch.push(toArchiveItem(m, meta, info));
-    }
-    for (let i = 0; i < batch.length; i += 50) {
-      await forwardArchiveBatch(batch.slice(i, i + 50));
-    }
+  sock.ev.on('messaging-history.set', async () => {
+    // History sync replays are ignored in multi-user mode to avoid ingesting stale pre-link messages.
   });
 
-  // Handle Inbound & Synced Messages
+  // Handle Live Inbound 1:1 Messages
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    const archiveBatch = [];
-    for (const m of messages) {
+    for (const m of (messages || [])) {
       if (m.key?.id && m.message) {
         messageStore.set(m.key.id, m.message);
         if (messageStore.size > 2000) {
           const firstKey = messageStore.keys().next().value;
           messageStore.delete(firstKey);
         }
+        mediaMsgStore.set(m.key.id, m);
+        if (mediaMsgStore.size > 1000) {
+          const firstMediaKey = mediaMsgStore.keys().next().value;
+          mediaMsgStore.delete(firstMediaKey);
+        }
       }
       if (!m.message) continue;
 
-      const remoteJid = m.key.remoteJid || '';
-      const messageId = m.key.id || '';
+      const remoteJid = m.key?.remoteJid || '';
+      const messageId = m.key?.id || '';
 
-      // Skip own AIVA-sent messages already recorded in backend (loop prevention)
+      // Skip own AIVA-sent messages & echoes
       if (sentMessageIds.has(messageId)) continue;
+      if (m.key?.fromMe) continue;
 
-      // Skip groups, status broadcast, reaction messages
-      if (remoteJid.endsWith('@g.us')) continue;
-      if (remoteJid === 'status@broadcast') continue;
-      if (m.message.reactionMessage) continue;
+      // Skip history replays
+      if (type && type !== 'notify') continue;
 
-      const info = resolvePeerInfo(m);
+      // Skip groups, status broadcasts, reactions, protocol messages
+      if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+      if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@broadcast')) continue;
+      if (m.message.reactionMessage || m.message.protocolMessage) continue;
+
+      const info = await resolvePeerInfo(m);
+      if (info.isOwnAccount) continue;
+
       const meta = extractMessageMeta(m);
-
-      // Outbound message typed by user directly on their phone -> archive only, never run as command
-      if (m.key.fromMe && !info.isSelfChat) {
-        if (meta.text && info.peerDigits) {
-          archiveBatch.push(toArchiveItem(m, meta, info));
-        }
-        continue;
-      }
-
-      // History sync replay ('append') -> archive peer chats only, never execute commands
-      if (type && type !== 'notify') {
-        if (!info.isSelfChat && meta.text && info.peerDigits) {
-          archiveBatch.push(toArchiveItem(m, meta, info));
-        }
-        continue;
-      }
-
-      const senderPhone = info.isSelfChat ? info.ownPhone : info.peerDigits;
-      const effectiveChatJid = info.isSelfChat ? `${info.ownPhone}@s.whatsapp.net` : remoteJid;
-
-      // Only show composing indicator in self-chat command channel
-      if (info.isSelfChat) {
-        try {
-          await sock.sendPresenceUpdate('composing', remoteJid);
-        } catch (_) {}
-      }
-
-      // Download voice note audio if present
-      let audioBase64 = null;
-      if (meta.rawInner?.audioMessage) {
-        try {
-          const buffer = await downloadMediaMessage(m, 'buffer', {});
-          if (buffer && buffer.length > 0) {
-            audioBase64 = buffer.toString('base64');
-          }
-        } catch (downloadErr) {
-          logger.warn(`[WhatsAppBridge] Failed to download audio note: ${downloadErr.message}`);
-        }
-      }
-
       console.log(
-        `[WhatsAppBridge] Inbound peer=${maskPeer(senderPhone)} self=${info.isSelfChat} media=${meta.mediaType} len=${meta.text.length}`
+        `[WhatsAppBridge] Inbound peer=${maskPeer(info.peerDigits)} media=${meta.mediaType} len=${meta.text.length}`
       );
 
-      // Forward to AIVA backend asynchronously
       forwardToBackend({
         message_id: messageId,
-        sender: senderPhone,
-        chat_jid: effectiveChatJid,
+        sender: info.peerDigits,
+        lid_jid: info.lidJid,
+        chat_jid: info.remoteJid,
         push_name: (m.pushName || '').trim(),
         text: meta.text,
         media_type: meta.mediaType,
-        audio_base64: audioBase64,
-        from_me: Boolean(m.key.fromMe),
+        media_mime: meta.mediaMime,
+        media_filename: meta.mediaFilename,
+        media_seconds: meta.mediaSeconds,
+        from_me: false,
         timestamp: Number(m.messageTimestamp || Math.floor(Date.now() / 1000))
       });
-    }
-    if (archiveBatch.length > 0) {
-      forwardArchiveBatch(archiveBatch);
     }
   });
 }
@@ -582,8 +552,8 @@ const server = http.createServer(async (req, res) => {
         }
 
         const toJid = data.to_jid || (to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`);
-        const toDigits = String(toJid).split('@')[0].replace(/\D/g, '');
-        const maskedTo = toDigits.length > 4 ? `+***${toDigits.slice(-4)}` : '****';
+        const toDigits = String(toJid).split('@')[0].split(':')[0].replace(/\D/g, '');
+        const maskedTo = toDigits.length > 4 ? `+${'*'.repeat(toDigits.length - 4)}${toDigits.slice(-4)}` : '****';
         console.log(`[WhatsAppBridge] Outbound send to=${maskedTo} len=${String(text).length}`);
         const sent = await sock.sendMessage(toJid, { text });
 
@@ -632,6 +602,65 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     });
+    return;
+  }
+
+  // POST /read (explicit read receipt after backend read succeeds)
+  if (method === 'POST' && url === '/read') {
+    try {
+      const data = await readJsonBody(req);
+      const jid = data.jid || data.chat_jid || '';
+      const ids = Array.isArray(data.message_ids) ? data.message_ids.filter(Boolean) : [];
+      if (!isConnected || !sock) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'whatsapp_disconnected' }));
+        return;
+      }
+      if (jid && ids.length > 0) {
+        const keys = ids.map((id) => ({ remoteJid: jid, id, fromMe: false }));
+        await sock.readMessages(keys);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', count: ids.length }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // POST /media/download (lazy media fetch on explicit user read only)
+  if (method === 'POST' && url === '/media/download') {
+    try {
+      const data = await readJsonBody(req);
+      const messageId = data.message_id || '';
+      const msgObj = messageId ? mediaMsgStore.get(messageId) : null;
+      if (!msgObj) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'media_not_cached', message: 'Media message is no longer cached in bridge memory.' }));
+        return;
+      }
+      const buffer = await downloadMediaMessage(msgObj, 'buffer', {});
+      if (!buffer || buffer.length === 0) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'empty_media' }));
+        return;
+      }
+      if (buffer.length > 15 * 1024 * 1024) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'media_too_large' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'success',
+        bytes: buffer.length,
+        base64: buffer.toString('base64')
+      }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'media_download_failed', message: err.message }));
+    }
     return;
   }
 

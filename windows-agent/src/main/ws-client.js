@@ -13,10 +13,12 @@ class DeviceWebSocketClient {
     this.backoffMs = 1000;
     this.maxBackoffMs = 30000;
     this.isManualDisconnect = false;
+    this.lastErrorCode = null;
   }
 
   connect() {
     this.isManualDisconnect = false;
+    this.lastErrorCode = null;
     this._clearTimers();
 
     let serverUrl = this.store.get('serverUrl') || 'https://aivaserve.duckdns.org';
@@ -56,8 +58,18 @@ class DeviceWebSocketClient {
 
       this.ws.on('close', (code, reason) => {
         this._clearTimers();
-        const reasonStr = reason ? reason.toString() : '';
-        if (code === 1008 || reasonStr.toLowerCase().includes('unauthorized') || reasonStr.toLowerCase().includes('revoked')) {
+        const reasonStr = (reason ? reason.toString() : '').toLowerCase();
+        if (
+          this.lastErrorCode === 'verification_required' ||
+          this.lastErrorCode === 'approval_required' ||
+          code === 4003 ||
+          reasonStr.includes('verification_required') ||
+          reasonStr.includes('approval_required')
+        ) {
+          this.onStatusChange('verification_required', 'Verification required');
+          return;
+        }
+        if (code === 1008 || reasonStr.includes('unauthorized') || reasonStr.includes('revoked')) {
           this.onStatusChange('revoked', 'Device token revoked or unauthorized.');
           return;
         }
@@ -119,6 +131,24 @@ class DeviceWebSocketClient {
   }
 
   async _handleMessage(msg) {
+    if (msg.type === 'error') {
+      const code = String(msg.code || '').toLowerCase();
+      if (code === 'verification_required' || code === 'approval_required') {
+        this.lastErrorCode = code;
+        this.isManualDisconnect = true;
+        this.onStatusChange('verification_required', 'Verification required');
+        try { if (this.ws) this.ws.close(4003, code); } catch {}
+        return;
+      }
+      if (code === 'revoked' || code === 'unauthorized') {
+        this.lastErrorCode = code;
+        this.isManualDisconnect = true;
+        this.onStatusChange('revoked', msg.message || 'Session terminated by server.');
+        try { if (this.ws) this.ws.close(1008, code); } catch {}
+        return;
+      }
+    }
+
     if (msg.type === 'connected') {
       this.onActivityLog({
         type: 'system',

@@ -49,7 +49,7 @@
    - **Speech Sanitizer (`sanitize_for_speech`):** Summarizes and suppresses raw URLs (speaks "the link on screen"), strips markdown/emojis, replaces code blocks with "I've displayed the code on screen", and cleanly truncates long replies (>400 chars).
 
 ### B. Device Command Channel & Remote Execution
-- **Protocol:** Authenticated WebSocket (`/ws/device`) between Cloud Backend and Windows Companion Agent.
+- **Protocol:** Authenticated WebSocket (`/ws/device`) between Cloud Backend and Windows Companion Agent. Both `/ws/device` and `/api/*` enforce the server-side verification gate (`gate_state == 'active'`, closing gated agents with close code `4003` and `verification_required` / `approval_required` and waking automatically on `AIVA_VERIFICATION_UNLOCKED`).
 - **Security & Capability Allowlist:**
   - `open_apps_urls`: Launch Windows executables, URLs, YouTube/Google compound search queries.
   - `media_volume`: Control volume levels (`0-100`), mute, play/pause, media track skipping.
@@ -60,7 +60,7 @@
 
 ### C. Agent Core, Tiered Routing & Multi-Agent DAG Planning (`core/agent/`)
 - **Feature-Flagged Agent Loop (`AIVA_AGENT_CORE`, default `0`, cutover `1` on Oracle VM):** When enabled (`docs/AGENT_ARCHITECTURE.md`), `TieredRouter` (`RULE_COUNT = 9`, `<10ms`) separates deterministic single-step actions (`Tier 0`) from fast Groq tool-calling (`Tier 1`) and deeper multi-step/research synthesis (`Tier 2`) orchestrated by `AgentOrchestrator` (`MAX_STEPS = 6`) over `LLMGateway`.
-- **Typed Tools & Risk Policy (`core/agent/tools/`, `core/agent/policy.py`):** Wraps capabilities plus `whatsapp_read`, `whatsapp_search`, `recall`, `create_reminder`, and `escalate` (15 built-in tools) with JSON Schema validation, per-channel allowlists, `'say confirm'` gates on destructive/non-trusted actions, and `<tool_result untrusted="true">` fencing.
+- **Typed Tools & Risk Policy (`core/agent/tools/`, `core/agent/policy.py`):** Wraps capabilities plus `whatsapp_inbox_status`, `whatsapp_read_messages`, `whatsapp_contact_preference`, `whatsapp_read`, `whatsapp_search`, `recall`, `create_reminder`, and `escalate` with JSON Schema validation, per-channel allowlists, `turn_origin == "user_explicit"` enforcement on private third-party inbox tools, `'say confirm'` / untrusted-taint confirmation gates, and `<tool_result untrusted="true">` fencing.
 - **Streaming & Observability:** `/api/chat/stream` emits SSE stages, deltas, sentence-chunked Edge TTS audio (`pop_complete_sentences`), and normalized sources rendered with locally vendored `marked` + `DOMPurify`. Non-PII aggregates populate `/api/telemetry` and the HUD Engine Stats grid (`T0/T1/T2`, p50/p95, success rate).
 - **Legacy Fallback (`AIVA_AGENT_CORE=0`):** `IntentClassifierService`, `PlannerAgent`, and `WorkflowEngine` remain intact with push delivery to `/ws/hud` and originating channels (`OutcomeReporterService`).
 - **Specialized Agents:** `ResearchAgent` (awaited Tavily search + freshness TTL + source citations), `BrowserAgent` (Selenium + DOM observer), `ObserverAgent`, `MemoryAgent`.
@@ -76,26 +76,18 @@
 - **Proactive Scheduler (`core/memory/scheduler.py`):** 30 s tick loop delivers due reminders and opt-in morning briefings via WhatsApp, Web HUD WebSocket (`/ws/hud`), or voice, honoring quiet hours (`23:00`–`07:00` unless urgent), snooze, and recurrence.
 - **Privacy & Controls:** Sensitive data filter (OTPs, passwords, API keys, Luhn cards, govt IDs), untrusted `web` provenance enforcement (`knowledge` + TTL only), prompt-injection neutralization, non-PII structured logging (`[Memory] stage=... duration_ms=... status=...`), REST CRUD/export/forget-all endpoints, and interactive HUD Memory panel.
 
-### E. WhatsApp Channel Subsystem (Baileys Linked Device)
-- **Zero-Cost Personal Device Protocol:** Uses `@whiskeysockets/baileys` (Node.js 20+ ESM) running as a dedicated systemd service (`deploy/aiva-whatsapp.service`) on `127.0.0.1:3001`. Pairs directly with an existing WhatsApp number without paid official Cloud APIs.
-- **Bi-Directional Loopback Architecture:**
-  - Bridge to Python Backend: `POST /internal/whatsapp/inbound` with `X-Bridge-Secret` (constant-time check).
-  - Python Backend to Bridge: `POST http://127.0.0.1:3001/send` with `X-Bridge-Secret`.
-  - Non-localhost callers to `/internal/*` are rejected with HTTP 403.
-- **Multi-Channel Capabilities:**
-  - `whatsapp_send(contact, message)`: Resolves contact by display name or alias, checks trust status, applies WhatsApp markdown formatting (`format_for_whatsapp`), archives outbound sends, and dispatches message via bridge.
-  - `whatsapp_lookup_contact(name)`: Resolves contact details with ambiguity checks.
-  - `whatsapp_read(contact, unread_only, hours_back, limit, mark_read)` & `whatsapp_search(query, contact, hours_back, limit)`: Per-user isolated inbox retrieval and FTS5 search (`untrusted_result=True`) across archived outbound/inbound/history messages with phone masking and contact disambiguation.
-  - Works transparently across WhatsApp chat, Web HUD text (`GET /api/whatsapp/messages`, `POST /api/whatsapp/messages/read`), and voice.
-- **Linking & Security:**
-  - 6-digit OTP code generated from HUD Settings (`LINK <code>`), valid for 10 minutes.
-  - Self-chat on AIVA's own number maps automatically to `WHATSAPP_OWNER_EMAIL`.
-  - Saved contacts messaging AIVA directly archive quietly (`archived_contact_message`) without false unlinked notices; unknown senders receive at most one rate-limited polite notice and are never archived into user inboxes or passed to LLMs/tools.
-  - Bridge outbound/history sync (`fromMe`, `'append'`, `messaging-history.set`, `@lid` peer PN resolution) pushes asynchronously to `POST /internal/whatsapp/archive` (`X-Bridge-Secret` + localhost check).
-  - System commands: `HELP`, `STATUS`, `STOP`/`UNLINK`, contact management (`save <num> as <name>`, `add alias <alias> for <name>`, `list contacts`).
-  - Voice notes transcribed seamlessly via Groq Whisper (`whisper-large-v3`).
-  - Power control commands (`shutdown`, `restart`) from WhatsApp are blocked unless `WHATSAPP_ALLOW_POWER_CONTROL=true` and verbally/text confirmed within 60 seconds.
-- **Database Isolation:** `whatsapp_links`, `whatsapp_contacts`, `whatsapp_events`, `whatsapp_messages`, and `whatsapp_messages_fts` in SQLite are strictly scoped by `user_id`. Non-PII structured logging with phone masking (`+*****3210`, never logging message bodies).
+### E. WhatsApp Channel Subsystem, Multi-User RBAC & Access Governance
+- **Dedicated AIVA Account & Admin Identity:** Single `@whiskeysockets/baileys` (Node.js 20+ ESM, `services/whatsapp-bridge/`) bridge on `127.0.0.1:3001` strictly pinned to `AIVA_WHATSAPP_NUMBER` (rejects mismatch & ignores own messages). Each user links one personal E.164 number in `whatsapp_links`; the sole admin is identified by `AIVA_ADMIN_EMAIL`.
+- **Bi-Directional Loopback & Media IPC:**
+  - Bridge -> Python: `POST /internal/whatsapp/inbound` (`127.0.0.1` + constant-time `X-Bridge-Secret`).
+  - Python -> Bridge: `POST /send`, `POST /media/download`, `POST /read` on `127.0.0.1:3001` (`X-Bridge-Secret`).
+- **Deterministic Credential Challenge & Hot Config (`services/whatsapp_config.py`):**
+  - Mtime-cached quoted `.env` loader (`AIVA_ACCESS_USERNAME`, `AIVA_ACCESS_PASSWORD` / `AIVA_ACCESS_PASSWORD_HASH`, `AIVA_ACCESS_EPOCH`) with constant-time compare, 2x lockout doubling, hourly challenge caps, batched 15 m admin notices, and epoch-bump re-auth. Zero challenge text reaches LLMs, logs, or inbox.
+  - **Entry A (WhatsApp-first):** `aiva\` trigger -> username -> password -> explicit `users.name` prompt -> `ACTIVE` session. **Entry B (HUD-first):** `AIVA-XXXXXX` `wa.me` deep link (or outbound verify) -> admin exemption vs credential challenge -> live WS unlock (`verification_unlocked`).
+- **Server-Side Gate & Non-Admin Guardrails:** Central Flask `403` middleware (`1.5s` TTL cache) + `/ws/device` enforce `gate_state == 'active'` (`number_pending`, `credential_pending`, `approval_pending`, `blocked`, `revoked`). Non-admins are bounded by `AIVA_USER_DAILY_MESSAGE_CAP`, `AIVA_USER_CAN_SEND_WHATSAPP=false`, and `WHATSAPP_ALLOW_POWER_CONTROL=false` (with 60s `CONFIRM` when enabled). Admin actions bump `token_version`, revoke WS/JWT sessions immediately, and write PII-free `admin_audit_logs`.
+- **Sessions, Verbatim Sends & Metadata-Separated Inbox (`services/whatsapp_notifier.py`):**
+  - Persistent `INACTIVE`/`ACTIVE` session machine (`aiva\`/`stop\`, `WHATSAPP_SESSION_IDLE_MINUTES`, scoped `reply_window_scope`). `send_to_contact` sends verbatim text with `"Sent to <Name>: <text>"` confirmations.
+  - Unknown senders drop message text & increment anonymized counters. Saved contact 1:1 inbound captures into `whatsapp_inbox` with 120s debounced/quiet-hours metadata alerts (`priority` bypass, `notify_inbound` mute). `whatsapp_read_messages` requires explicit user intent, lazily transcribes voice via Whisper with temp-file wipe, posts `/read` post-read, and fences content in `<whatsapp_message untrusted="true">` (`untrusted_taint`).
 
 ---
 
@@ -129,9 +121,12 @@ aiva/
 ├── services/
 │   ├── whatsapp-bridge/                # Node.js 20+ ESM Baileys linked device bridge
 │   │   ├── package.json
-│   │   ├── index.js                    # HTTP listener (127.0.0.1:3001) & message relay
+│   │   ├── index.js                    # HTTP listener (127.0.0.1:3001), number guard, media & read receipts
+│   │   ├── pairing.js                  # Baileys QR/code pairing state machine
 │   │   └── pair.js                     # Terminal pairing code & QR utility
-│   ├── whatsapp_service.py             # Linking, contacts, formatting, rate limiting
+│   ├── whatsapp_config.py              # Mtime-cached quoted .env loader, password hash verify, triggers
+│   ├── whatsapp_notifier.py            # Metadata-separated 1:1 inbox capture, debounce, quiet hours & purge
+│   ├── whatsapp_service.py             # Entry A/B challenge, RBAC sessions, contacts, admin cmds & Whisper read
 │   ├── voice_service.py                # Edge TTS, Groq Whisper STT, speech sanitizer
 │   ├── device_channel.py               # Cloud WebSocket server for device agents
 │   ├── device_manager.py               # Pairing, heartbeat, device revocation

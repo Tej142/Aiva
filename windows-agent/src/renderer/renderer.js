@@ -609,6 +609,10 @@ async function initMainView() {
         const phoneHint = msg.phone_masked ? ` (${msg.phone_masked})` : '';
         titleWaPill.title = `WhatsApp ${msg.status || 'unknown'}${phoneHint} — click to manage pairing`;
       }
+    } else if (event.data && event.data.type === 'AIVA_VERIFICATION_UNLOCKED') {
+      if (window.aivaAgent && window.aivaAgent.reconnectDevice) {
+        window.aivaAgent.reconnectDevice().catch(() => {});
+      }
     }
   });
 
@@ -816,6 +820,9 @@ async function initMainView() {
       } else if (status.state === 'connecting' || status.state === 'reconnecting') {
         titleStatusDot.className = 'status-dot connecting';
         titleStatusText.textContent = 'Reconnecting';
+      } else if (status.state === 'verification_required') {
+        titleStatusDot.className = 'status-dot offline';
+        titleStatusText.textContent = 'Verification required';
       } else {
         titleStatusDot.className = 'status-dot offline';
         titleStatusText.textContent = 'Offline';

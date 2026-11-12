@@ -2577,3 +2577,288 @@ body.is-embedded #web-auth-overlay {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* ── WhatsApp Verification Gate, Session Bar, Inbox Summary & Admin Panel (tokens.css only) ── */
+.wa-gate-backdrop {
+    z-index: 1200;
+}
+
+.wa-gate-dialog {
+    max-width: 480px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    color: var(--text);
+}
+
+.wa-gate-header {
+    text-align: center;
+    margin-bottom: var(--space-4);
+}
+
+.wa-gate-title {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--text-lg);
+    color: var(--text);
+}
+
+.wa-gate-subtitle {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-2);
+}
+
+.wa-gate-banner {
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--status-warning-bg);
+    color: var(--warning);
+    font-size: var(--text-xs);
+    margin-bottom: var(--space-4);
+}
+
+.wa-gate-banner.error {
+    background: var(--status-danger-bg);
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.wa-gate-banner.info {
+    background: var(--status-info-bg);
+    border-color: var(--info);
+    color: var(--info);
+}
+
+.wa-gate-row {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.wa-gate-row .form-input {
+    flex: 1;
+}
+
+.wa-gate-code-panel {
+    margin-top: var(--space-4);
+    padding: var(--space-4);
+    background: var(--elevated);
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.wa-gate-code-label {
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.wa-gate-code-value {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--accent-light);
+    margin: var(--space-2) 0;
+}
+
+.wa-gate-instructions {
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    margin: 0 0 var(--space-3) 0;
+}
+
+.wa-gate-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.wa-me-btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wa-gate-outbound-box {
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+    text-align: left;
+}
+
+.wa-gate-footer {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-4);
+}
+
+.wa-session-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    margin-top: var(--space-3);
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.wa-session-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-2);
+}
+
+.wa-session-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.wa-inbox-summary-box {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.wa-inbox-summary-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.wa-inbox-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.wa-inbox-chip {
+    font-size: var(--text-xs);
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-2);
+}
+
+/* Admin Panel */
+.admin-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    align-items: start;
+}
+
+@media (max-width: 1024px) {
+    .admin-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.admin-card {
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.admin-side-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.admin-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.admin-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+}
+
+.admin-subtitle {
+    margin: 4px 0 0 0;
+    font-size: var(--text-xs);
+    color: var(--text-2);
+}
+
+.admin-table-wrap {
+    overflow-x: auto;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-xs);
+}
+
+.admin-table th,
+.admin-table td {
+    text-align: left;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.admin-table th {
+    color: var(--text-2);
+    font-weight: 600;
+}
+
+.admin-block-form {
+    display: flex;
+    gap: var(--space-2);
+    margin: var(--space-3) 0;
+}
+
+.admin-block-form .wa-pair-input {
+    flex: 1;
+}
+
+.admin-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.admin-list-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 10px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    color: var(--text-2);
+}

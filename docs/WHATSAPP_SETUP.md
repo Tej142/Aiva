@@ -6,40 +6,54 @@ This guide describes how to configure, pair, and run the cost-free WhatsApp chan
 
 ## 1. Overview & Architecture
 
-- **No Official Cloud API Cost**: Uses your existing phone number connected via Baileys Web multi-device protocol.
-- **Node Bridge (`services/whatsapp-bridge/`)**: Runs locally on `127.0.0.1:3001`, managing the persistent Baileys WebSocket connection and media handling.
-- **Python Backend (`services/whatsapp_service.py` & `aiva_server.py`)**: Handles linking, contact resolution, conversation routing, command execution, and rate limiting.
-- **Loopback Security**: All internal communication is restricted to `127.0.0.1` and authenticated using constant-time `X-Bridge-Secret` token verification.
-- **Per-User Isolation**: Phone links and contacts are strictly scoped to authenticated user IDs in SQLite (`aiva.db`). Unknown senders cannot trigger LLMs or device tools.
+- **Dedicated AIVA Account (`AIVA_WHATSAPP_NUMBER`)**: The Baileys bridge pairs exclusively with AIVA's dedicated WhatsApp number (`AIVA_WHATSAPP_NUMBER`) and refuses startup/relay if paired to any other account. Each user links their own personal phone number via the HUD or WhatsApp onboarding.
+- **Admin Governance (`AIVA_ADMIN_EMAIL`)**: Only the account whose email matches `AIVA_ADMIN_EMAIL` holds admin privileges (bridge pairing/logout, user approve/deny/revoke, phone block/unblock, third-party `whatsapp_send` when restricted).
+- **Node Bridge (`services/whatsapp-bridge/`)**: Runs locally on `127.0.0.1:3001` (`index.js`, `pairing.js`, `pair.js`) managing the Baileys WebSocket, media lazy-download (`/media/download`), and read receipts (`/read`).
+- **Python Control Plane (`services/whatsapp_config.py`, `services/whatsapp_service.py`, `services/whatsapp_notifier.py`, `aiva_server.py`)**: Deterministic credential challenges, mtime-cached `.env` hot-reloading, server-side `gate_state` middleware + `/ws/device` enforcement, DB-backed sessions, and metadata-separated third-party inbox alerts.
+- **Zero-PII Loopback Security**: All `/internal/*` bridge calls are restricted to `127.0.0.1` with constant-time `X-Bridge-Secret` validation. Challenges, credentials, message bodies, and full phone numbers never appear in logs.
 
 ---
 
 ## 2. Environment Configuration (`.env`)
 
-Add or update the following variables in your `.env` file on the server (do **never** commit this file):
+Configure `.env` on the server (**never commit** `.env`; lock permissions with `chmod 600 .env`).  
+Edits to `.env` take effect automatically via `mtime`-cached reloading without restarting AIVA. Quoted values support spaces:
 
 ```bash
-# Enable WhatsApp subsystem
 WHATSAPP_ENABLED=true
-
-# The existing phone number AIVA runs on (digits only with country code, no +)
 AIVA_WHATSAPP_NUMBER=919876543210
-
-# The AIVA account email that self-messages ("Message yourself") map to
-WHATSAPP_OWNER_EMAIL=charanpc1420091@gmail.com
-
-# Node bridge port and shared internal secret
+AIVA_ADMIN_EMAIL=charanpc1420091@gmail.com
 WHATSAPP_BRIDGE_PORT=3001
 WHATSAPP_BRIDGE_SECRET=generate_a_random_64_character_hex_secret_here
-
-# Backend loopback URL
 WHATSAPP_BACKEND_URL=http://127.0.0.1:5000
 
-# Human-like delay and rate limiting
-WHATSAPP_REPLY_DELAY_MS=700
-WHATSAPP_MAX_OUTBOUND_PER_HOUR=20
-WHATSAPP_MAX_MESSAGE_CHARS=1500
+# Deterministic shared credential challenge (optional AIVA_ACCESS_PASSWORD_HASH overrides password)
+AIVA_ACCESS_USERNAME="team_user"
+AIVA_ACCESS_PASSWORD="change_this_shared_password"
+AIVA_ACCESS_PASSWORD_HASH=
+AIVA_ACCESS_EPOCH=1
+AIVA_ACCESS_MAX_ATTEMPTS=3
+AIVA_ACCESS_LOCK_MINUTES=30
+AIVA_ACCESS_CHALLENGE_TTL_MINUTES=5
+AIVA_ACCESS_MAX_CHALLENGES_PER_HOUR=20
+AIVA_REQUIRE_OWNER_APPROVAL=false
+
+# Entry B & User Limits
+WHATSAPP_VERIFY_MODE=inbound
+WHATSAPP_MAX_VERIFY_SENDS_PER_DAY=3
+AIVA_USER_DAILY_MESSAGE_CAP=100
+AIVA_USER_CAN_SEND_WHATSAPP=false
 WHATSAPP_ALLOW_POWER_CONTROL=false
+
+# Sessions & Notifier
+WHATSAPP_START_TRIGGER="aiva\\"
+WHATSAPP_STOP_TRIGGER="stop\\"
+WHATSAPP_SESSION_IDLE_MINUTES=60
+WHATSAPP_REPLY_WINDOW_MINUTES=10
+WHATSAPP_QUIET_HOURS_START=23:00
+WHATSAPP_QUIET_HOURS_END=07:00
+WHATSAPP_INBOX_RETENTION_DAYS=7
+WHATSAPP_MARK_READ_ON_READ=true
 ```
 
 ---
@@ -87,29 +101,24 @@ sudo systemctl status aiva-whatsapp
 
 ---
 
-## 4. User Linking & Daily Commands
+## 4. Onboarding, Verification Gate & Daily Commands
 
-### Linking a User Account
-1. Open the Web HUD -> Navigate to the **WhatsApp** tab.
-2. Enter your personal phone number (with country code, e.g. `919876543210`) and click **Generate Code**.
-3. A 6-digit code (valid for 10 minutes) will be generated (e.g. `839201`).
-4. From that phone, send `LINK 839201` to AIVA's WhatsApp number.
-5. AIVA will verify the code and respond confirming that your account is linked.
+### Entry A — WhatsApp-First Onboarding
+1. From an unlinked phone, message `aiva\` (or `aiva/`, case-insensitive) to AIVA's number.
+2. Complete the deterministic credential challenge (`username`, then `password`; delete those chat messages afterward).
+3. Enter your explicit display name (*"What should I call you?"*), stored directly in `users.name`.
+4. Your number is linked and an `ACTIVE` chat session begins immediately (or enters `approval_pending` if `AIVA_REQUIRE_OWNER_APPROVAL=true`).
 
-### Chat & Voice Commands
-- **Direct Messaging**:
-  - *"message dad to come early this evening"*
-  - *"tell mom I will be late for dinner"*
-- **Research & Forward**:
-  - *"search about Government Polytechnic, Tirupati and send the details to my second number"*
-- **Contact Management in Chat**:
-  - *"save 9876543210 as dad"*
-  - *"add alias papa for dad"*
-  - *"list my contacts"*
-- **System Commands**:
-  - `help` — Show available commands.
-  - `status` — Check bridge connection and linked account status.
-  - `unlink` or `stop` — Disconnect your phone from AIVA.
+### Entry B — HUD Verification Gate
+1. New email-OTP accounts start in `number_pending` (`403 verification_required` across `/api/*` and `/ws/device` until active).
+2. In the HUD Verification screen, enter your personal E.164 phone number and click **Send on WhatsApp** to send the generated `AIVA-XXXXXX` code via the `wa.me` button (or enter a code sent via WhatsApp if `WHATSAPP_VERIFY_MODE=outbound`).
+3. **Owner Exemption:** The `AIVA_ADMIN_EMAIL` account unlocks immediately upon matching code arrival; all other users complete the shared credential challenge to unlock the HUD live over `/ws/hud`.
+
+### Sessions, Inbox & Commands
+- **Session Lifecycle (`INACTIVE` / `ACTIVE`):** Verified users send `aiva\` (or `aiva\ <command>`) to start chatting, and `stop\` (or HUD **End Session**) to end. Idle sessions auto-close after `WHATSAPP_SESSION_IDLE_MINUTES` with a single notice.
+- **Third-Party Messages & Voice Notes:** Messages from a user's saved contacts are stored in `whatsapp_inbox` with **metadata-only** debounced alerts (or quiet-hours morning digests unless the contact is marked **Priority**). Reading inbox items requires explicit user intent (`whatsapp_read_messages`), lazily transcribes voice notes while wiping temp files, posts `/read` receipts only post-read, and fences text in `<whatsapp_message untrusted="true">`.
+- **Contact & Chat Commands:** `HELP`, `STATUS`, `save <number> as <name>`, `add alias <alias> for <name>`, `list contacts`, `mute/unmute <name>`, `priority/unpriority <name>`, `message <contact> <text>`.
+- **Admin Governance & Epoch Rotation:** In WhatsApp or the HUD **Admin** tab: `list users`, `approve <user>`, `deny <user>`, `revoke <user>`, `block <phone>`, `unblock <phone>`. Revoking bumps `token_version` and drops HTTP/WebSocket sessions immediately. Increment `AIVA_ACCESS_EPOCH` in `.env` at any time to force all non-admin WhatsApp users to re-verify against updated credentials.
 
 ---
 
