@@ -428,6 +428,7 @@ class WhatsAppService:
         self.db.upsert_challenge({
             "id": (existing_ch or {}).get("id") or f"wch_{uuid.uuid4().hex[:12]}",
             "phone_e164": phone,
+            "lid_jid": (existing_ch or {}).get("lid_jid") or "",
             "user_id": user_id,
             "entry_mode": "B",
             "verify_code": code,
@@ -439,6 +440,9 @@ class WhatsAppService:
             "updated_at": now,
             "created_at": (existing_ch or {}).get("created_at") or now,
         })
+
+        # Pre-resolve personal number -> WhatsApp @lid via bridge USync (best-effort)
+        self._schedule_coro(self.resolve_phone_lid(phone))
 
         user = self.db.get_user_by_id(user_id)
         if user and user.get("gate_state") not in ("blocked", "revoked", "active"):
@@ -525,8 +529,37 @@ class WhatsAppService:
         k_loop = getattr(self.kernel, "loop", None)
         if k_loop and getattr(k_loop, "is_running", lambda: False)():
             asyncio.run_coroutine_threadsafe(coro, k_loop)
-        else:
+            return
+        try:
             coro.close()
+        except Exception:
+            pass
+
+    async def resolve_phone_lid(self, phone_e164: str) -> str:
+        """Best-effort bridge USync lookup to pre-cache phone -> WhatsApp @lid mapping."""
+        phone = normalize_phone(phone_e164)
+        if not phone:
+            return ""
+        try:
+            code, body = await self._bridge_request(
+                "POST",
+                "/resolve-lid",
+                payload={"phones": [phone]},
+                timeout=3.5,
+            )
+            if code != 200 or not isinstance(body, dict):
+                return ""
+            for m in (body.get("mappings") or []):
+                m_phone = normalize_phone(m.get("phone") or m.get("jid", "").split("@")[0])
+                m_lid = str(m.get("lid") or "").strip()
+                if m_phone == phone and m_lid.endswith("@lid"):
+                    self.db.bind_challenge_lid(phone, m_lid)
+                    self.db.bind_whatsapp_link_lid(phone, lid_jid=m_lid)
+                    logger.info(f"[WhatsApp] stage=resolve_lid phone={mask_phone(phone)} status=bound")
+                    return m_lid
+        except Exception as e:
+            logger.debug(f"[WhatsApp] stage=resolve_lid status=skip err={type(e).__name__}")
+        return ""
 
     def _emit_hud_unlock(self, user_id: str, gate_state: str) -> None:
         try:
@@ -1334,7 +1367,9 @@ class WhatsAppService:
         lid_jid = str(payload.get("lid_jid") or "").strip()
         sender_phone = normalize_phone(sender_raw.split("@")[0] if "@" in sender_raw else sender_raw)
 
-        # Resolve LID -> linked user phone if bridge only saw an @lid JID
+        now = time.time()
+
+        # Resolve LID -> linked user phone or pre-verified challenge phone (via USync/sender_pn)
         link = None
         if sender_phone:
             link = self.db.get_whatsapp_link_by_phone(sender_phone)
@@ -1342,6 +1377,10 @@ class WhatsAppService:
             link = self.db.get_whatsapp_link_by_lid(lid_jid)
             if link and not sender_phone:
                 sender_phone = normalize_phone(link.get("phone_e164", ""))
+        if not sender_phone and lid_jid:
+            ch_by_lid = self.db.get_challenge_by_lid(lid_jid, now=now)
+            if ch_by_lid:
+                sender_phone = normalize_phone(ch_by_lid.get("phone_e164", ""))
 
         if not sender_phone:
             return {"status": "ignored_invalid_sender"}
@@ -1360,15 +1399,15 @@ class WhatsAppService:
 
         logger.info(f"[WhatsApp] stage=inbound sender={masked} media={media_type} linked={bool(link)} status=recv")
 
-        # Keep LID/WA JID binding fresh on linked accounts
+        # Keep LID/WA JID binding fresh on linked accounts and pending challenges
         if link and (lid_jid or chat_jid):
             self.db.bind_whatsapp_link_lid(sender_phone, lid_jid=lid_jid, wa_jid=chat_jid)
+        elif lid_jid:
+            self.db.bind_challenge_lid(sender_phone, lid_jid)
 
         user = self.db.get_user_by_id(link["user_id"]) if link else None
         if user and (not user.get("is_active", 1) or user.get("gate_state") in ("blocked", "revoked")):
             return {"status": "ignored_revoked"}
-
-        now = time.time()
 
         # ── A. Active deterministic credential challenge (never hits LLM/memory/inbox) ──
         ch = self.db.get_challenge_by_phone(sender_phone)

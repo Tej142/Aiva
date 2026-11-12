@@ -70,6 +70,7 @@ _GATE_EXEMPT_EXACT = frozenset({
     "/api/whatsapp/link/verify-outbound",
     "/api/whatsapp/link/status",
     "/api/whatsapp/status",
+    "/ws/hud",
 })
 
 
@@ -1626,6 +1627,17 @@ def internal_whatsapp_archive():
     items = payload.get("messages") if isinstance(payload, dict) else []
     res = kernel.whatsapp_service.archive_messages(list(items or []))
     return jsonify({"status": "ok", **res}), 200
+
+
+@app.route("/internal/whatsapp/pending-phones", methods=["GET"])
+def internal_whatsapp_pending_phones():
+    """Loopback-only bridge endpoint listing unmapped Entry B / linked phones for USync LID lookup."""
+    from services.whatsapp_service import verify_bridge_secret
+    provided_secret = request.headers.get("X-Bridge-Secret", "")
+    if not verify_bridge_secret(provided_secret):
+        return jsonify({"status": "error", "message": "Unauthorized bridge secret"}), 401
+    phones = db.list_pending_phones_for_lid_sync()
+    return jsonify({"status": "ok", "phones": phones}), 200
 
 
 @app.route("/api/whatsapp/status", methods=["GET"])

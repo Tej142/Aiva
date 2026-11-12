@@ -613,6 +613,12 @@ async function initMainView() {
       if (window.aivaAgent && window.aivaAgent.reconnectDevice) {
         window.aivaAgent.reconnectDevice().catch(() => {});
       }
+    } else if (event.data && event.data.type === 'AIVA_LOGOUT_REQUEST') {
+      if (window.aivaAgent && window.aivaAgent.logout) {
+        localStorage.clear();
+        sessionStorage.clear();
+        window.aivaAgent.logout().catch(() => {});
+      }
     }
   });
 

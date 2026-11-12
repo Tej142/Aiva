@@ -2095,6 +2095,60 @@ class DatabaseService:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_challenge_by_lid(self, lid_jid: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """Look up an active challenge whose lid_jid was bound via USync or sender_pn."""
+        clean_lid = (lid_jid or "").strip()
+        if not clean_lid:
+            return None
+        ts = float(now if now is not None else time.time())
+        row = self.get_connection().execute(
+            """SELECT * FROM whatsapp_access_challenges
+               WHERE lid_jid = ? AND (expires_at > ? OR code_expires_at > ?)
+               ORDER BY updated_at DESC LIMIT 1""",
+            (clean_lid, ts, ts),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def bind_challenge_lid(self, phone_e164: str, lid_jid: str) -> None:
+        clean_phone = normalize_phone(phone_e164)
+        clean_lid = (lid_jid or "").strip()
+        if not clean_phone or not clean_lid:
+            return
+        conn = self.get_connection()
+        conn.execute(
+            "UPDATE whatsapp_access_challenges SET lid_jid = ?, updated_at = ? WHERE phone_e164 = ?",
+            (clean_lid, time.time(), clean_phone),
+        )
+        conn.commit()
+
+    def list_pending_phones_for_lid_sync(self, now: Optional[float] = None) -> List[str]:
+        """Return E.164 phone numbers needing USync LID mapping (pending challenges + verified links without lid_jid)."""
+        ts = float(now if now is not None else time.time())
+        conn = self.get_connection()
+        phones: List[str] = []
+        seen = set()
+        for row in conn.execute(
+            """SELECT phone_e164 FROM whatsapp_access_challenges
+               WHERE COALESCE(lid_jid, '') = '' AND COALESCE(phone_e164, '') != ''
+                 AND (code_expires_at > ? OR expires_at > ?)
+               ORDER BY updated_at DESC LIMIT 25""",
+            (ts, ts),
+        ).fetchall():
+            p = normalize_phone(row["phone_e164"])
+            if p and p not in seen:
+                seen.add(p)
+                phones.append(p)
+        for row in conn.execute(
+            """SELECT phone_e164 FROM whatsapp_links
+               WHERE status = 'verified' AND COALESCE(lid_jid, '') = '' AND COALESCE(phone_e164, '') != ''
+               ORDER BY COALESCE(verified_at, created_at) DESC LIMIT 25""",
+        ).fetchall():
+            p = normalize_phone(row["phone_e164"])
+            if p and p not in seen:
+                seen.add(p)
+                phones.append(p)
+        return phones
+
     def upsert_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
         now = time.time()
         cid = challenge.get("id") or f"wch_{uuid.uuid4().hex[:12]}"

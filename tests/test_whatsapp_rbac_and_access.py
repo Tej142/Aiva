@@ -31,8 +31,9 @@ from services.whatsapp_service import WhatsAppService
 
 
 class _FakeBridgeHttpResp:
-    def __init__(self, payload=None):
+    def __init__(self, payload=None, status=200):
         import json as _json
+        self.status = int(status)
         self._bytes = _json.dumps(payload or {"status": "sent", "messageId": "wa_out_1"}).encode("utf-8")
 
     def read(self):
@@ -857,6 +858,87 @@ class TestWhatsAppRBACAndAccess(unittest.TestCase):
             logs_str = str(r_aud.get_json()["logs"])
             self.assertIn("revoke_user", logs_str)
             self.assertNotIn("919855554444", logs_str)
+
+    # ── 9. /ws/hud Gate Exemption, /internal/whatsapp/pending-phones & Entry B USync @lid Binding ──
+    def test_09_ws_hud_gate_exemption_and_usync_lid_entry_b(self):
+        # 1. /ws/hud must be exempt from HTTP verification gate so live unlock events reach gated HUDs
+        self.assertIn("/ws/hud", aiva_server._GATE_EXEMPT_EXACT)
+
+        client = aiva_server.app.test_client()
+        mem_headers = {"Authorization": f"Bearer {self.member_tokens['access_token']}"}
+        with patch.object(aiva_server, "db", self.db), \
+             patch.object(aiva_server, "auth_service", self.auth), \
+             patch.object(aiva_server, "kernel", SimpleNamespace(whatsapp_service=self.wa)):
+            aiva_server.invalidate_user_gate_cache()
+            # Protected route still 403s for number_pending user
+            self.assertEqual(client.get("/api/devices", headers=mem_headers).status_code, 403)
+            # Simulated request to /ws/hud bypasses _enforce_verification_gate (does not 403)
+            with aiva_server.app.test_request_context("/ws/hud?token=fake", headers=mem_headers):
+                gate_resp = aiva_server._enforce_verification_gate()
+                self.assertIsNone(gate_resp)
+
+        # 2. Entry B start_link -> /internal/whatsapp/pending-phones & USync @lid pre-binding + fail-closed spoof check
+        hud_events = []
+        wa = WhatsAppService(db=self.db, hud_deliver=lambda uid, payload: hud_events.append((uid, payload)))
+
+        # Start Entry B link as admin owner
+        link_res = wa.start_link(self.admin_id, "919800000001")
+        code = link_res["link_code"]
+        self.assertTrue(code.startswith("AIVA-"))
+
+        # /internal/whatsapp/pending-phones requires X-Bridge-Secret and returns unmapped phone
+        with patch.object(aiva_server, "db", self.db):
+            self.assertEqual(client.get("/internal/whatsapp/pending-phones").status_code, 401)
+            r_pend = client.get(
+                "/internal/whatsapp/pending-phones",
+                headers={"X-Bridge-Secret": "rbac-test-bridge-secret"},
+            )
+            self.assertEqual(r_pend.status_code, 200)
+            self.assertIn("919800000001", r_pend.get_json()["phones"])
+
+        # Spoofed/unmapped @lid without sender phone fails closed even with exact valid code
+        r_spoof = asyncio.run(wa.handle_inbound({
+            "message_id": "lid_spoof_1",
+            "sender": "",
+            "lid_jid": "999999999999999@lid",
+            "chat_jid": "999999999999999@lid",
+            "text": code,
+        }))
+        self.assertEqual(r_spoof["status"], "ignored_invalid_sender")
+        self.assertEqual(self.db.get_user_by_id(self.admin_id)["gate_state"], "number_pending")
+
+        # Bridge USync /resolve-lid resolves the real @lid for 919800000001 -> binds challenge
+        def _fake_resolve(req, timeout=5.0):
+            return _FakeBridgeHttpResp({
+                "status": "success",
+                "mappings": [{"phone": "919800000001", "jid": "919800000001@s.whatsapp.net", "lid": "266666181189859@lid", "exists": True}],
+            })
+
+        with patch("urllib.request.urlopen", _fake_resolve):
+            bound_lid = asyncio.run(wa.resolve_phone_lid("919800000001"))
+        self.assertEqual(bound_lid, "266666181189859@lid")
+        self.assertEqual(self.db.get_challenge_by_lid("266666181189859@lid")["user_id"], self.admin_id)
+
+        # Now inbound from that USync-verified @lid (even with empty sender) links owner & unlocks HUD live
+        replies = []
+
+        async def _rec_send(phone, msg, user_id=None, to_jid=None, **kw):
+            replies.append((phone, to_jid, msg))
+            return {"status": "success"}
+
+        with patch.object(wa, "send_whatsapp_message", side_effect=_rec_send):
+            r_ok = asyncio.run(wa.handle_inbound({
+                "message_id": "lid_real_1",
+                "sender": "",
+                "lid_jid": "266666181189859@lid",
+                "chat_jid": "266666181189859@lid",
+                "text": code,
+            }))
+        self.assertEqual(r_ok["status"], "owner_linked")
+        self.assertEqual(self.db.get_user_by_id(self.admin_id)["gate_state"], "active")
+        self.assertTrue(any(uid == self.admin_id and p.get("type") == "verification_unlocked" for uid, p in hud_events))
+        self.assertEqual(replies[0][0], "919800000001")
+        self.assertEqual(replies[0][1], "266666181189859@lid")
 
 
 if __name__ == "__main__":

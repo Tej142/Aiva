@@ -7,20 +7,26 @@ import dotenv from 'dotenv';
 import pino from 'pino';
 import { patchBaileys } from './patch-baileys.js';
 
-// Apply Baileys LID patch before initializing socket
+// Apply Baileys LID + decode-wa-message patches BEFORE dynamically importing @whiskeysockets/baileys
+// (Static ES imports hoist ahead of top-level statements and would load unpatched modules on first boot.)
 patchBaileys();
 
-import baileysPackage, {
+const baileysModule = await import('@whiskeysockets/baileys');
+const baileysPackage = baileysModule.default || baileysModule;
+const {
   DisconnectReason,
   useMultiFileAuthState,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
-  Browsers
-} from '@whiskeysockets/baileys';
+  Browsers,
+  S_WHATSAPP_NET,
+  getBinaryNodeChild,
+  getBinaryNodeChildren
+} = baileysModule;
 
 const makeWASocket = typeof baileysPackage === 'function'
   ? baileysPackage
-  : (baileysPackage.default || baileysPackage.makeWASocket);
+  : (baileysPackage?.default || baileysPackage?.makeWASocket || baileysModule.makeWASocket);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,7 +68,166 @@ let reconnectAttempts = 0;
 const sentMessageIds = new Set();
 const messageStore = new Map(); // id -> proto.IMessage for decryption retry
 const mediaMsgStore = new Map(); // id -> full WAMessage for lazy /media/download
+const lidMapPath = path.join(authDir, 'lid_map.json');
+const lidToPhone = new Map(); // lidDigits -> phoneDigits
+const phoneToLid = new Map(); // phoneDigits -> lidDigits
+const usyncCooldownByLid = new Map();
+let _lidMapSaveTimer = null;
 let _pairingManagerPromise = null;
+
+function extractJidDigits(jid) {
+  return String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+}
+
+function loadLidMap() {
+  try {
+    if (!fs.existsSync(lidMapPath)) return;
+    const raw = JSON.parse(fs.readFileSync(lidMapPath, 'utf8'));
+    const pairs = raw && typeof raw.lid_to_phone === 'object' ? raw.lid_to_phone : raw;
+    if (pairs && typeof pairs === 'object') {
+      for (const [lid, phone] of Object.entries(pairs)) {
+        const l = extractJidDigits(lid);
+        const p = extractJidDigits(phone);
+        if (l.length >= 6 && p.length >= 7) {
+          lidToPhone.set(l, p);
+          phoneToLid.set(p, l);
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+function scheduleSaveLidMap() {
+  if (_lidMapSaveTimer) return;
+  _lidMapSaveTimer = setTimeout(() => {
+    _lidMapSaveTimer = null;
+    try {
+      const obj = { lid_to_phone: Object.fromEntries(lidToPhone.entries()) };
+      const tmp = `${lidMapPath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(obj), { mode: 0o600 });
+      fs.renameSync(tmp, lidMapPath);
+      try { fs.chmodSync(lidMapPath, 0o600); } catch (_) {}
+    } catch (_) {}
+  }, 400);
+}
+
+function recordLidPair(lidJidOrDigits, phoneJidOrDigits) {
+  if (!lidJidOrDigits || !phoneJidOrDigits) return false;
+  const lidStr = String(lidJidOrDigits);
+  const pnStr = String(phoneJidOrDigits);
+  // Reject swapped @lid passed as a phone JID
+  if (pnStr.includes('@lid')) return false;
+  if (lidStr.includes('@s.whatsapp.net')) return false;
+  const lidDigits = extractJidDigits(lidStr);
+  const phoneDigits = extractJidDigits(pnStr);
+  if (lidDigits.length < 6 || phoneDigits.length < 7) return false;
+  if (lidDigits === phoneDigits) return false;
+  const prev = lidToPhone.get(lidDigits);
+  lidToPhone.set(lidDigits, phoneDigits);
+  phoneToLid.set(phoneDigits, lidDigits);
+  if (prev !== phoneDigits) {
+    scheduleSaveLidMap();
+  }
+  return true;
+}
+
+loadLidMap();
+
+async function fetchBackendPendingPhones() {
+  try {
+    const res = await fetch(`${WHATSAPP_BACKEND_URL}/internal/whatsapp/pending-phones`, {
+      method: 'GET',
+      headers: { 'X-Bridge-Secret': WHATSAPP_BRIDGE_SECRET },
+      signal: AbortSignal.timeout(2500)
+    });
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => ({}));
+    return Array.isArray(data.phones) ? data.phones.filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function resolveLidsViaUsync(phones) {
+  if (!isConnected || !sock || !Array.isArray(phones) || phones.length === 0) {
+    return [];
+  }
+  const cleanPhones = Array.from(new Set(
+    phones.map(p => extractJidDigits(p)).filter(p => p.length >= 7 && p.length <= 15)
+  )).slice(0, 25);
+  if (cleanPhones.length === 0) return [];
+
+  try {
+    const sid = typeof sock.generateMessageTag === 'function' ? sock.generateMessageTag() : String(Date.now());
+    const result = await sock.query({
+      tag: 'iq',
+      attrs: {
+        to: S_WHATSAPP_NET,
+        type: 'get',
+        xmlns: 'usync'
+      },
+      content: [
+        {
+          tag: 'usync',
+          attrs: {
+            sid,
+            mode: 'query',
+            last: 'true',
+            index: '0',
+            context: 'interactive'
+          },
+          content: [
+            {
+              tag: 'query',
+              attrs: {},
+              content: [
+                { tag: 'contact', attrs: {} },
+                { tag: 'lid', attrs: {} }
+              ]
+            },
+            {
+              tag: 'list',
+              attrs: {},
+              content: cleanPhones.map(p => ({
+                tag: 'user',
+                attrs: {},
+                content: [{ tag: 'contact', attrs: {}, content: `+${p}` }]
+              }))
+            }
+          ]
+        }
+      ]
+    });
+
+    const usyncNode = getBinaryNodeChild(result, 'usync');
+    const listNode = getBinaryNodeChild(usyncNode, 'list');
+    const users = getBinaryNodeChildren(listNode, 'user');
+    const mappings = [];
+    for (const user of users) {
+      const jid = user?.attrs?.jid || '';
+      const contactNode = getBinaryNodeChild(user, 'contact');
+      const lidNode = getBinaryNodeChild(user, 'lid');
+      const lidVal = lidNode?.attrs?.val || '';
+      const exists = contactNode?.attrs?.type === 'in';
+      const phoneDigits = extractJidDigits(jid);
+      if (phoneDigits && lidVal && lidVal.includes('@lid')) {
+        recordLidPair(lidVal, jid);
+      }
+      if (phoneDigits) {
+        mappings.push({
+          phone: phoneDigits,
+          jid,
+          lid: lidVal,
+          exists
+        });
+      }
+    }
+    return mappings;
+  } catch (err) {
+    logger.warn(`[WhatsAppBridge] USync LID resolution warning: ${err?.message || err}`);
+    return [];
+  }
+}
 
 async function getPairingManager() {
   if (!_pairingManagerPromise) {
@@ -113,6 +278,10 @@ function detachMainSocket() {
   try { current.ev?.removeAllListeners?.('creds.update'); } catch (_) {}
   try { current.ev?.removeAllListeners?.('messages.upsert'); } catch (_) {}
   try { current.ev?.removeAllListeners?.('messaging-history.set'); } catch (_) {}
+  try { current.ev?.removeAllListeners?.('chats.phoneNumberShare'); } catch (_) {}
+  try { current.ev?.removeAllListeners?.('contacts.upsert'); } catch (_) {}
+  try { current.ev?.removeAllListeners?.('contacts.update'); } catch (_) {}
+  try { current.ws?.removeAllListeners?.('CB:message'); } catch (_) {}
   const client = current.ws;
   if (client) {
     try { client.on?.('error', () => {}); } catch (_) {}
@@ -242,8 +411,56 @@ async function connectToWhatsApp() {
         try { sock?.ws?.close?.(); } catch (_) {}
         process.exit(1);
       }
+
+      // Best-effort USync LID pre-resolution for pending Entry B / linked phones
+      setTimeout(() => {
+        fetchBackendPendingPhones()
+          .then((phones) => resolveLidsViaUsync(phones))
+          .catch(() => {});
+      }, 1500);
     }
   });
+
+  // Capture raw stanza attributes (sender_pn / sender_lid / participant_pn) before or alongside decode
+  try {
+    sock.ws?.on?.('CB:message', (stanza) => {
+      const attrs = stanza?.attrs || {};
+      const from = attrs.from || '';
+      const participant = attrs.participant || '';
+      const senderPn = attrs.sender_pn || attrs.recipient_pn || attrs.peer_recipient_pn || '';
+      const senderLid = attrs.sender_lid || '';
+      const participantPn = attrs.participant_pn || '';
+      const participantLid = attrs.participant_lid || '';
+      if (from.endsWith('@lid') && senderPn) {
+        recordLidPair(from, senderPn);
+      } else if (senderLid && from.endsWith('@s.whatsapp.net')) {
+        recordLidPair(senderLid, from);
+      }
+      if (participant.endsWith('@lid') && participantPn) {
+        recordLidPair(participant, participantPn);
+      } else if (participantLid && participant.endsWith('@s.whatsapp.net')) {
+        recordLidPair(participantLid, participant);
+      }
+    });
+  } catch (_) {}
+
+  sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+    if (lid && jid) {
+      recordLidPair(lid, jid);
+    }
+  });
+
+  const ingestContactMappings = (contacts) => {
+    if (!Array.isArray(contacts)) return;
+    for (const c of contacts) {
+      if (!c) continue;
+      if (c.lid && c.id && String(c.id).endsWith('@s.whatsapp.net')) {
+        recordLidPair(c.lid, c.id);
+      }
+    }
+  };
+  sock.ev.on('contacts.upsert', ingestContactMappings);
+  sock.ev.on('contacts.update', ingestContactMappings);
 
   // Extract text / caption + media metadata ONLY (never eager-download media)
   function extractMessageMeta(m) {
@@ -285,19 +502,57 @@ async function connectToWhatsApp() {
   async function resolvePeerInfo(m) {
     const remoteJid = m?.key?.remoteJid || '';
     const altJid = m?.key?.remoteJidAlt || m?.key?.senderPn || m?.key?.participantPn || '';
-    const ownLid = (sock?.user?.lid || '').split('@')[0].split(':')[0];
-    const ownPhone = (sock?.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '') || AIVA_WHATSAPP_NUMBER;
-    const remoteDigits = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
-    let altDigits = String(altJid).split('@')[0].split(':')[0].replace(/\D/g, '');
-    const lidJid = remoteJid.endsWith('@lid') ? remoteJid : (String(altJid).endsWith('@lid') ? String(altJid) : '');
+    const ownLid = extractJidDigits(sock?.user?.lid || '');
+    const ownPhone = extractJidDigits(sock?.user?.id || '') || AIVA_WHATSAPP_NUMBER;
+    const remoteDigits = extractJidDigits(remoteJid);
+    let altDigits = altJid && !String(altJid).includes('@lid') ? extractJidDigits(altJid) : '';
+    let lidJid = remoteJid.endsWith('@lid')
+      ? remoteJid
+      : (m?.key?.senderLid || m?.key?.participantLid || (String(altJid).endsWith('@lid') ? String(altJid) : ''));
+    let source = !remoteJid.endsWith('@lid') ? 'jid' : '';
+
+    if (lidJid && altDigits) {
+      recordLidPair(lidJid, `${altDigits}@s.whatsapp.net`);
+      source = 'alt_attr';
+    }
+
+    if (remoteJid.endsWith('@lid') && !altDigits && lidToPhone.has(remoteDigits)) {
+      altDigits = lidToPhone.get(remoteDigits) || '';
+      if (altDigits) source = 'lid_map';
+    }
 
     if (remoteJid.endsWith('@lid') && !altDigits && sock?.signalRepository?.lidMapping?.getPNForLID) {
       try {
         const pn = await sock.signalRepository.lidMapping.getPNForLID(remoteJid);
-        if (pn) {
-          altDigits = String(pn).split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (pn && !String(pn).includes('@lid')) {
+          altDigits = extractJidDigits(pn);
+          if (altDigits) {
+            recordLidPair(remoteJid, pn);
+            source = 'signal_repo';
+          }
         }
       } catch (_) {}
+    }
+
+    if (remoteJid.endsWith('@lid') && !altDigits) {
+      const lastTry = usyncCooldownByLid.get(remoteDigits) || 0;
+      if (Date.now() - lastTry > 5000) {
+        usyncCooldownByLid.set(remoteDigits, Date.now());
+        if (usyncCooldownByLid.size > 500) {
+          const oldest = usyncCooldownByLid.keys().next().value;
+          usyncCooldownByLid.delete(oldest);
+        }
+        try {
+          const pendingPhones = await fetchBackendPendingPhones();
+          if (pendingPhones.length > 0) {
+            await resolveLidsViaUsync(pendingPhones);
+          }
+        } catch (_) {}
+      }
+      if (lidToPhone.has(remoteDigits)) {
+        altDigits = lidToPhone.get(remoteDigits) || '';
+        if (altDigits) source = 'usync';
+      }
     }
 
     const peerDigits = (!remoteJid.endsWith('@lid') ? remoteDigits : (altDigits || ''));
@@ -305,7 +560,7 @@ async function connectToWhatsApp() {
       Boolean(ownPhone && peerDigits && peerDigits === ownPhone) ||
       Boolean(ownLid && remoteDigits && remoteDigits === ownLid);
 
-    return { remoteJid, ownPhone, ownLid, peerDigits, lidJid, isOwnAccount };
+    return { remoteJid, ownPhone, ownLid, peerDigits, lidJid, isOwnAccount, source };
   }
 
   function maskPeer(digits) {
@@ -313,8 +568,9 @@ async function connectToWhatsApp() {
     return clean.length > 4 ? `+${'*'.repeat(clean.length - 4)}${clean.slice(-4)}` : '****';
   }
 
-  sock.ev.on('messaging-history.set', async () => {
-    // History sync replays are ignored in multi-user mode to avoid ingesting stale pre-link messages.
+  sock.ev.on('messaging-history.set', async ({ contacts }) => {
+    // History message replays are ignored in multi-user mode; only capture contact LID mappings if provided.
+    ingestContactMappings(contacts);
   });
 
   // Handle Live Inbound 1:1 Messages
@@ -354,7 +610,7 @@ async function connectToWhatsApp() {
 
       const meta = extractMessageMeta(m);
       console.log(
-        `[WhatsAppBridge] Inbound peer=${maskPeer(info.peerDigits)} media=${meta.mediaType} len=${meta.text.length}`
+        `[WhatsAppBridge] Inbound peer=${maskPeer(info.peerDigits)} has_lid=${Boolean(info.lidJid)} src=${info.source || 'unresolved'} media=${meta.mediaType} len=${meta.text.length}`
       );
 
       forwardToBackend({
@@ -525,6 +781,33 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'logout_failed', message: err?.message || 'Failed to logout bridge' }));
+    }
+    return;
+  }
+
+  // POST /resolve-lid (USync contact+lid query for pending Entry B or linked numbers)
+  if (method === 'POST' && url === '/resolve-lid') {
+    try {
+      const data = await readJsonBody(req);
+      const rawList = Array.isArray(data.phones)
+        ? data.phones
+        : (data.phone ? [data.phone] : []);
+      if (rawList.length === 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad_request', message: 'Missing phone or phones' }));
+        return;
+      }
+      if (!isConnected || !sock) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'whatsapp_disconnected' }));
+        return;
+      }
+      const mappings = await resolveLidsViaUsync(rawList);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'success', mappings }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'resolve_lid_failed', message: err?.message || 'Failed' }));
     }
     return;
   }

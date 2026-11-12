@@ -128,6 +128,36 @@ export function patchBaileys() {
     }
   }
 
+  // 3. Patch Baileys decode-wa-message.js to preserve sender_pn / sender_lid / participant_pn on key
+  const dwmPath = path.resolve(__dirname, 'node_modules/@whiskeysockets/baileys/lib/Utils/decode-wa-message.js');
+  if (fs.existsSync(dwmPath)) {
+    let dwmContent = fs.readFileSync(dwmPath, 'utf8');
+    const dwmNeedle = `    const key = {
+        remoteJid: chatId,
+        fromMe,
+        id: msgId,
+        participant
+    };`;
+    const dwmReplacement = `    const stanzaAttrs = (stanza && stanza.attrs) || {};
+    const key = {
+        remoteJid: chatId,
+        fromMe,
+        id: msgId,
+        senderLid: stanzaAttrs.sender_lid,
+        senderPn: stanzaAttrs.sender_pn,
+        participant,
+        participantPn: stanzaAttrs.participant_pn,
+        participantLid: stanzaAttrs.participant_lid,
+        remoteJidAlt: stanzaAttrs.sender_pn || stanzaAttrs.recipient_pn || stanzaAttrs.peer_recipient_pn
+    };`;
+    if (dwmContent.includes(dwmNeedle)) {
+      dwmContent = dwmContent.replace(dwmNeedle, dwmReplacement);
+      fs.writeFileSync(dwmPath, dwmContent, 'utf8');
+      console.log('[WhatsAppBridge] Patched Baileys decode-wa-message.js (preserve senderPn/senderLid)');
+      anyModified = true;
+    }
+  }
+
   return anyModified;
 }
 

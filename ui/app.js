@@ -2857,10 +2857,21 @@ function initWaGateOverlay() {
     if (btnLogout) {
         btnLogout.addEventListener('click', async () => {
             try {
-                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+                const rt = localStorage.getItem('aiva_refresh_token') || '';
+                await fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ refresh_token: rt }),
+                });
             } catch {}
             localStorage.clear();
             sessionStorage.clear();
+            if (window.self !== window.top || document.body.classList.contains('is-embedded')) {
+                try {
+                    window.parent.postMessage({ type: 'AIVA_LOGOUT_REQUEST' }, '*');
+                } catch {}
+                return;
+            }
             hideWaGateOverlay();
             showWebAuthModal();
         });
