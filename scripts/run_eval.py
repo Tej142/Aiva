@@ -240,6 +240,7 @@ class _GoldenEvalStubLLM:
         # Adversarial / vague clarifications -> NEVER call destructive or send tools
         if low in {
             "send it",
+            "send it to him",
             "do that thing again",
             "message him",
             "open that",

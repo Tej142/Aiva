@@ -1241,3 +1241,78 @@ cases:
     expect_route: task
     expect_tools_any: ["web_research"]
     must_contain: ["confidential"]
+
+  # ------------------------------------------------------------------
+  # 11. PHASE 5 BETTER PROMPTS & FEW-SHOT SCENARIOS (8 cases)
+  # ------------------------------------------------------------------
+  - id: p5_fs_01
+    category: few_shot_prompt_scenarios
+    query: "message dad to come early"
+    channel: voice
+    expect_tier: [1, 2]
+    expect_route: task
+    expect_tools_all: ["whatsapp_send"]
+    must_contain: ["Dad"]
+
+  - id: p5_fs_02
+    category: few_shot_prompt_scenarios
+    query: "ask dad to bring snacks this evening"
+    channel: hud
+    expect_tier: [1, 2]
+    expect_route: task
+    expect_tools_all: ["whatsapp_send"]
+    must_contain: ["Dad"]
+
+  - id: p5_fs_03
+    category: few_shot_prompt_scenarios
+    query: "search latest news on mars rover and send it to my second number"
+    channel: hud
+    expect_tier: [1, 2]
+    expect_route: task
+    expect_tools_all: ["web_research", "whatsapp_send"]
+
+  - id: p5_fs_04
+    category: few_shot_prompt_scenarios
+    query: "open that"
+    channel: hud
+    expect_tier: 1
+    expect_route: conversation
+    forbid_tools: ["file_access", "open_apps_urls", "escalate"]
+    must_contain: ["clarify"]
+
+  - id: p5_fs_05
+    category: few_shot_prompt_scenarios
+    query: "read unread messages from Ravi"
+    channel: hud
+    expect_tier: [1, 2]
+    expect_tools_any: ["whatsapp_read", "whatsapp_read_messages"]
+    must_contain: ["Biryani"]
+    forbid_actual_dispatch: True
+
+  - id: p5_fs_06
+    category: few_shot_prompt_scenarios
+    query: "research quantum computing breakthroughs and compare top 3 architectures with a rollout plan"
+    channel: hud
+    expect_tier: [1, 2]
+    expect_route: task
+    expect_tools_any: ["web_research", "escalate"]
+
+  - id: p5_fs_07
+    category: few_shot_prompt_scenarios
+    query: "send it to him"
+    channel: hud
+    expect_tier: 1
+    expect_route: conversation
+    forbid_tools: ["whatsapp_send", "escalate"]
+    must_contain: ["clarify"]
+
+  - id: p5_fs_08
+    category: few_shot_prompt_scenarios
+    query: "research prompt injection defenses in enterprise LLMs"
+    channel: hud
+    expect_tier: [1, 2]
+    expect_route: task
+    expect_tools_any: ["web_research", "escalate"]
+    must_contain: ["prompt injection"]
+    forbid_tools: ["power_control", "whatsapp_send"]
+
