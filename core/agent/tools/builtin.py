@@ -4,6 +4,7 @@ import inspect
 from typing import Any, Dict, Optional
 
 from core.agent.policy import RISK_CONFIRM, RISK_LOW, RISK_READ
+from core.agent.telemetry import normalize_escalation_reason
 from core.agent.tools.registry import ToolContext, ToolRegistry, ToolSpec
 
 
@@ -823,17 +824,42 @@ def register_builtin_tools(
 
     # 13. escalate (Tier 1 -> Tier 2 explicit handoff tool)
     async def handle_escalate(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
-        return {"status": "escalate", "reason": args.get("reason", "needs_stronger_reasoning")}
+        raw_code = args.get("reason_code") or args.get("reason")
+        code = normalize_escalation_reason(raw_code)
+        return {
+            "status": "escalate",
+            "reason_code": code,
+            "message": f"Handoff to Tier 2 for deeper reasoning ({code}).",
+        }
 
     registry.register(ToolSpec(
         name="escalate",
-        description="Escalate the current request to AIVA's deeper reasoning tier when complex planning or multi-source synthesis is required.",
+        description=(
+            "Escalate to Tier 2 for deeper reasoning. Call this tool when: "
+            "(a) the task requires multi-step planning, coordination across multiple tools, or complex synthesis, "
+            "(b) earlier tool results returned empty or contradictory information, "
+            "(c) you are unsure how to fulfill the request safely and accurately. "
+            "Never call escalate if you are already on Tier 2."
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "reason": {"type": "string", "description": "Short reason escalation is needed."},
+                "reason_code": {
+                    "type": "string",
+                    "enum": [
+                        "multi_step_planning",
+                        "empty_contradictory_results",
+                        "unsure",
+                        "complex_synthesis",
+                    ],
+                    "description": "Standardized reason code for escalating to Tier 2.",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Short explanation of what needs deeper reasoning.",
+                },
             },
-            "required": ["reason"],
+            "required": ["reason_code"],
         },
         handler=handle_escalate,
         risk=RISK_READ,

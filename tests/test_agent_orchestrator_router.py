@@ -90,9 +90,13 @@ class TestAgentOrchestratorAndRouter(unittest.TestCase):
         self.assertEqual(r_vol.tier, 0)
         self.assertEqual(r_vol.tool_args["level"], 50)
 
-        # Compound should NOT hit single-step Tier 0
+        # Compound should NOT hit single-step Tier 0: starts at Tier 1 unless explicit deep research
         r_comp = router.route("research Tirupati and send summary to my second number")
-        self.assertEqual(r_comp.tier, 2)
+        self.assertEqual(r_comp.tier, 1)
+
+        # Direct Tier 2 is reserved for explicit deep research and browser workflows
+        r_deep = router.route("deep dive into Tirupati history and architecture")
+        self.assertEqual(r_deep.tier, 2)
 
         r_chat = router.route("hi")
         self.assertEqual(r_chat.tier, 1)

@@ -50,13 +50,13 @@ _QUICK_SEARCH_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Tier 2 triggers for multi-step plans, deep web synthesis, or complex browser automation
+# Direct Tier 2 triggers: explicit deep research and browser workflows only
 _TIER2_RESEARCH_RE = re.compile(
-    r"\b(?:research|deep\s+dive|compare|summarize\s+and\s+send|search\s+.+\s+and\s+(?:send|message|save)|explain\s+in\s+detail|latest\s+news|what\s+happened)\b",
+    r"\b(?:deep\s+research|deep\s+dive|in-depth\s+research|comprehensive\s+research)\b",
     re.IGNORECASE,
 )
 _TIER2_BROWSER_RE = re.compile(
-    r"\b(?:fill\s+the\s+form|book\s+a|sign\s+in\s+on|browser\s+automation|scrape|log\s+into)\b",
+    r"\b(?:fill\s+(?:the\s+|out\s+)?form|book\s+a\s+(?:flight|ticket|hotel|table)|sign\s+in\s+on\s+website|log\s+into\s+website|browser\s+automation|scrape)\b",
     re.IGNORECASE,
 )
 
@@ -187,9 +187,10 @@ class TieredRouter:
                         tier=0, rule_name="open_app", tool_name="open_apps_urls", tool_args={"app_name": target}, tag_hint="action"
                     ))
 
-        # Tier 2 escalation criteria: multi-step plans, research synthesis, browser workflows
-        clauses = len(re.split(r"\b(?:and\s+then|and|then|after\s+that)\b", low))
-        if clauses >= 3 or _TIER2_RESEARCH_RE.search(raw) or _TIER2_BROWSER_RE.search(raw):
+        # Direct Tier 2 ONLY for explicit deep research and browser workflows.
+        # Stop escalating to Tier 2 purely because of clause count or keywords;
+        # Tier 1 models escalate dynamically using the escalate tool.
+        if _TIER2_RESEARCH_RE.search(raw) or _TIER2_BROWSER_RE.search(raw):
             return _finish(RouteDecision(tier=2, rule_name="tier2_complex_or_research", tag_hint="research" if _TIER2_RESEARCH_RE.search(raw) else "action"))
 
         # Default: Tier 1 fast Groq LLM with tools

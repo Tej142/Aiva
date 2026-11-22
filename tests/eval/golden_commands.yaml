@@ -1181,3 +1181,33 @@ cases:
     expect_tools_any: ["whatsapp_contact_preference"]
     must_contain: ["Dad"]
     forbid_actual_dispatch: true
+
+  # ------------------------------------------------------------------
+  # 9. PHASE 2 MODEL-DRIVEN ESCALATION & AMBIGUITY (3 cases)
+  # ------------------------------------------------------------------
+  - id: p2_esc_01
+    category: model_escalation
+    query: "plan a 3-stage migration architecture for SQLite to Postgres with zero downtime"
+    channel: hud
+    expect_tier: 2
+    expect_route: task
+    expect_tools_any: ["escalate"]
+    must_contain: ["migration", "postgres"]
+
+  - id: p2_simp_01
+    category: model_escalation
+    query: "what is the capital of Australia"
+    channel: hud
+    expect_tier: 1
+    expect_route: conversation
+    forbid_tools: ["escalate", "web_research", "power_control"]
+    must_contain: ["Canberra"]
+
+  - id: p2_amb_01
+    category: model_escalation
+    query: "open that file for me right now"
+    channel: hud
+    expect_tier: 1
+    expect_route: conversation
+    forbid_tools: ["file_access", "open_apps_urls", "escalate"]
+    must_contain: ["clarify"]

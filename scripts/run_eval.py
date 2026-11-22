@@ -116,11 +116,16 @@ class _GoldenEvalStubLLM:
         sys_prompt = messages[0].get("content", "") if messages else ""
         last = messages[-1].get("content", "") if messages else ""
 
-        # Extract original user prompt cleanly
+        # Extract original user prompt cleanly (last user message that is not tool results or tier handoff)
         orig_query = ""
         for msg in messages:
-            if msg.get("role") == "user" and not str(msg.get("content", "")).startswith("Tool execution results:"):
-                orig_query = str(msg.get("content", "")).strip()
+            content = str(msg.get("content", "")).strip()
+            if (
+                msg.get("role") == "user"
+                and not content.startswith("Tool execution results:")
+                and not content.startswith("[Tier Handoff]")
+            ):
+                orig_query = content
 
         low = orig_query.lower().strip()
 
@@ -187,9 +192,46 @@ class _GoldenEvalStubLLM:
             "open that",
             "search for",
             "delete it",
-        }:
+        } or "open that file" in low or "send that note" in low:
             return LLMResponse(
-                text="Could you clarify exactly which item or contact you mean before I proceed?",
+                text="Could you clarify exactly which item, file, or contact you mean before I proceed?",
+                provider="stub",
+                model="eval-stub",
+            )
+
+        # Simple factual questions stay on Tier 1
+        if "capital of australia" in low:
+            return LLMResponse(text="The capital of Australia is Canberra.", provider="stub", model="eval-stub")
+
+        # Phase 2 Model-driven escalation on Tier 1
+        if tier == 1 and (
+            "migration architecture" in low
+            or "zero downtime" in low
+            or (re.search(r"\b(search|research)\b", low) and re.search(r"\b(send|text|message)\b", low))
+            or ("search python logging tips" in low and "create a document" in low)
+            or ("open notepad" in low and "take a screenshot" in low)
+            or (
+                re.search(r"\b(?:research|compare\s+|latest\s+news|what\s+happened|explain\s+in\s+detail)\b", low)
+                and not any(k in low for k in ("quick joke", "http 429", "wal mode", "speaks telugu", "workspace", "capital of australia"))
+            )
+        ):
+            code = "multi_step_planning" if any(k in low for k in ("send", "document", "plan", "migration", "screenshot")) else "complex_synthesis"
+            return LLMResponse(
+                tool_calls=[
+                    LLMToolCall(id="tc_esc", name="escalate", arguments={"reason_code": code}),
+                ],
+                provider="stub",
+                model="eval-stub",
+            )
+
+        if "migration architecture" in low or "zero downtime" in low:
+            return LLMResponse(
+                text=(
+                    "Here is the 3-stage zero-downtime migration architecture for SQLite to Postgres:\n"
+                    "1. Dual-write: Write new records to SQLite and replicate asynchronously to Postgres.\n"
+                    "2. Backfill: Migrate historical SQLite rows with hash verification.\n"
+                    "3. Cutover: Switch read queries to Postgres, verify latency, and deprecate SQLite writes."
+                ),
                 provider="stub",
                 model="eval-stub",
             )

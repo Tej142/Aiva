@@ -13,7 +13,31 @@ _LOGGER = get_logger("Agent")
 _FORBIDDEN_LOG_KEYS = frozenset({
     "message", "text", "query", "content", "transcript", "prompt",
     "response", "reply", "phone", "phone_e164", "email", "address",
+    "reason", "explanation",
 })
+
+ESCALATION_REASONS = frozenset({
+    "multi_step_planning",
+    "empty_contradictory_results",
+    "unsure",
+    "complex_synthesis",
+})
+
+
+def normalize_escalation_reason(raw: Any) -> str:
+    """Normalize any raw string/enum into one of the 4 approved non-PII escalation enum codes."""
+    if not raw:
+        return "multi_step_planning"
+    low = str(raw).lower().strip().replace("-", "_").replace(" ", "_")
+    if low in ESCALATION_REASONS:
+        return low
+    if any(k in low for k in ("empty", "contradict", "conflict", "missing", "failed", "no_result", "null")):
+        return "empty_contradictory_results"
+    if any(k in low for k in ("unsure", "uncertain", "confidence", "unclear", "doubt", "ambiguous", "clarify")):
+        return "unsure"
+    if any(k in low for k in ("synth", "complex", "deep", "analyze", "reasoning", "research")):
+        return "complex_synthesis"
+    return "multi_step_planning"
 
 
 def log_agent(stage: str, duration_ms: float = 0.0, status: str = "ok", **fields: Any) -> str:
@@ -30,6 +54,8 @@ def log_agent(stage: str, duration_ms: float = 0.0, status: str = "ok", **fields
         if lk == "user_id":
             s = str(val)
             parts.append(f"user={s[:8]}")
+        elif lk == "reason_code":
+            parts.append(f"reason_code={normalize_escalation_reason(val)}")
         else:
             parts.append(f"{key}={val}")
     line = "[Agent] " + " ".join(parts)

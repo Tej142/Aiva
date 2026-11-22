@@ -14,5 +14,10 @@ def log_agent_startup(*args, **kwargs):
     return _startup(*args, **kwargs)
 
 
-__all__ = ["is_agent_core_enabled", "log_agent_startup"]
+def normalize_escalation_reason(raw):
+    from core.agent.telemetry import normalize_escalation_reason as _norm
+    return _norm(raw)
+
+
+__all__ = ["is_agent_core_enabled", "log_agent_startup", "normalize_escalation_reason"]
 
