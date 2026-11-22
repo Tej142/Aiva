@@ -176,8 +176,10 @@ class TieredRouter:
             m_open = _OPEN_APP_RE.match(low)
             if m_open:
                 target = m_open.group(1).strip()
-                if target not in {"that", "this", "it", "one", "something", "them"} and not any(
-                    bad in target for bad in ("browser for", "file ", "folder ", "document ", "settings", "whatsapp chat")
+                words = set(target.split())
+                vague_or_non_app = {"that", "this", "it", "one", "something", "them", "file", "folder", "document"}
+                if not (words & vague_or_non_app) and not any(
+                    bad in target for bad in ("browser for", "settings", "whatsapp chat")
                 ):
                     if target in _URL_ALIASES:
                         return _finish(RouteDecision(
