@@ -13,7 +13,8 @@ _LOGGER = get_logger("Agent")
 _FORBIDDEN_LOG_KEYS = frozenset({
     "message", "text", "query", "content", "transcript", "prompt",
     "response", "reply", "phone", "phone_e164", "email", "address",
-    "reason", "explanation",
+    "reason", "explanation", "draft", "draft_answer", "check_prompt",
+    "verdict_reason", "check_reason", "plan", "plan_steps", "steps_text",
 })
 
 ESCALATION_REASONS = frozenset({
@@ -22,6 +23,25 @@ ESCALATION_REASONS = frozenset({
     "unsure",
     "complex_synthesis",
 })
+
+CHECK_VERDICTS = frozenset({
+    "answers",
+    "partial",
+    "wrong",
+})
+
+
+def normalize_check_verdict(raw: Any) -> str:
+    """Normalize any raw string/enum into one of the 3 approved non-PII check enum codes."""
+    if not raw:
+        return "answers"
+    low = str(raw).lower().strip().replace("-", "_")
+    if low in CHECK_VERDICTS:
+        return low
+    for v in ("wrong", "partial", "answers"):
+        if v in low:
+            return v
+    return "answers"
 
 
 def normalize_escalation_reason(raw: Any) -> str:
@@ -56,6 +76,8 @@ def log_agent(stage: str, duration_ms: float = 0.0, status: str = "ok", **fields
             parts.append(f"user={s[:8]}")
         elif lk == "reason_code":
             parts.append(f"reason_code={normalize_escalation_reason(val)}")
+        elif lk == "verdict":
+            parts.append(f"verdict={normalize_check_verdict(val)}")
         else:
             parts.append(f"{key}={val}")
     line = "[Agent] " + " ".join(parts)

@@ -1,6 +1,9 @@
 """Agent Core loop orchestrating Tier 0/1/2 routing, parallel tool calls, policy & streaming."""
 
 import asyncio
+import json
+import os
+import re
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -11,7 +14,12 @@ from core.agent.policy import (
 )
 from core.agent.router import TieredRouter
 from core.agent.shaper import normalize_sources, shape_response
-from core.agent.telemetry import TelemetryRecorder, log_agent, normalize_escalation_reason
+from core.agent.telemetry import (
+    TelemetryRecorder,
+    log_agent,
+    normalize_check_verdict,
+    normalize_escalation_reason,
+)
 from core.agent.tools.registry import ToolContext, ToolRegistry
 
 
@@ -32,6 +40,122 @@ class AgentOrchestrator:
     MAX_STEPS = 6
     PER_STEP_TIMEOUT_S = 20.0
     TOTAL_TIMEOUT_S = 55.0
+
+    @classmethod
+    def get_tier2_max_steps(cls) -> int:
+        try:
+            val = int(os.environ.get("AIVA_TIER2_MAX_STEPS", str(cls.MAX_STEPS)))
+            return max(1, min(val, 20))
+        except (ValueError, TypeError):
+            return cls.MAX_STEPS
+
+    @classmethod
+    def get_text_total_timeout_s(cls) -> float:
+        try:
+            val = float(os.environ.get("AIVA_TEXT_TOTAL_TIMEOUT_S", str(cls.TOTAL_TIMEOUT_S)))
+            return max(5.0, min(val, 300.0))
+        except (ValueError, TypeError):
+            return cls.TOTAL_TIMEOUT_S
+
+    @classmethod
+    def is_planning_enabled(cls) -> bool:
+        return os.environ.get("AIVA_ENABLE_PLANNING", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    @classmethod
+    def is_self_check_enabled(cls) -> bool:
+        return os.environ.get("AIVA_ENABLE_SELF_CHECK", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    async def _generate_plan(
+        self,
+        query: str,
+        *,
+        tier: int = 2,
+        timeout_s: float = 15.0,
+    ) -> List[str]:
+        """Emit a short structured JSON plan (max 5 steps) on Tier 2 / escalated turns."""
+        plan_prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You are AIVA's planning module. Produce a concise, actionable execution plan "
+                    "for the user's task as a JSON object with a single 'plan' key containing a list "
+                    "of at most 5 brief steps. Output ONLY valid JSON in format: "
+                    '{"plan": ["step 1", "step 2", ...]}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Task: {query}",
+            },
+        ]
+        try:
+            resp = await self.llm_gateway.complete(
+                plan_prompt,
+                tier=tier,
+                reasoning_effort="low",
+                stream=False,
+                timeout_s=timeout_s,
+            )
+            text = (resp.text or "").strip()
+            if "```" in text:
+                m_fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+                if m_fence:
+                    text = m_fence.group(1).strip()
+            m_obj = re.search(r"\{.*\}", text, re.DOTALL)
+            if m_obj:
+                data = json.loads(m_obj.group(0))
+                if isinstance(data, dict) and "plan" in data and isinstance(data["plan"], list):
+                    clean = [str(s).strip() for s in data["plan"] if str(s).strip()]
+                    return clean[:5]
+        except Exception as err:
+            log_agent("plan", 0.0, "error", err=type(err).__name__)
+        return []
+
+    async def _run_self_check(
+        self,
+        *,
+        user_input: str,
+        draft_text: str,
+        tool_results_summary: str,
+        tier: int = 2,
+        timeout_s: float = 12.0,
+    ) -> Tuple[str, float]:
+        """Run ONE self-check call on Tier 2: verdict: answers | partial | wrong."""
+        t_c0 = time.perf_counter()
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "Evaluate whether the draft answer fully answers the user's request using the tool results.\n"
+                    "Respond with ONE line in the format:\n"
+                    "verdict: answers | partial | wrong"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"User request: {user_input}\n\n"
+                    f"Tool results summary: {tool_results_summary[:1500]}\n\n"
+                    f"Draft answer: {draft_text[:1500]}\n\n"
+                    "Does the draft answer fully answer the user's request using the tool results? verdict: answers | partial | wrong"
+                ),
+            },
+        ]
+        try:
+            resp = await self.llm_gateway.complete(
+                prompt,
+                tier=tier,
+                reasoning_effort="low",
+                stream=False,
+                timeout_s=timeout_s,
+            )
+            check_ms = (time.perf_counter() - t_c0) * 1000
+            verdict = normalize_check_verdict(resp.text)
+            return verdict, check_ms
+        except Exception as err:
+            check_ms = (time.perf_counter() - t_c0) * 1000
+            log_agent("check", duration_ms=check_ms, status="error", err=type(err).__name__)
+            return "answers", check_ms
 
     def __init__(
         self,
@@ -369,6 +493,7 @@ class AgentOrchestrator:
         channel_tools = self.registry.to_openai_tools(channel=channel)
         current_tier = route_dec.tier
         tools_used: List[str] = []
+        tool_result_blocks: List[str] = []
         collected_sources: List[Dict[str, Any]] = []
         ref_id: Optional[str] = None
         tool_time_ms = 0.0
@@ -385,12 +510,42 @@ class AgentOrchestrator:
 
         await self._emit_event(on_event, {"type": "status", "status": "thinking"})
 
-        for step in range(self.MAX_STEPS):
+        total_timeout_s = (
+            self.TOTAL_TIMEOUT_S
+            if str(channel).lower() == "voice"
+            else self.get_text_total_timeout_s()
+        )
+        max_steps = (
+            self.get_tier2_max_steps()
+            if current_tier >= 2
+            else self.MAX_STEPS
+        )
+
+        plan_done = False
+        check_done = False
+        recovery_attempted = False
+        tool_recovery_hint_given = False
+
+        for step in range(max_steps):
             elapsed_s = time.perf_counter() - t0
-            remaining_s = self.TOTAL_TIMEOUT_S - elapsed_s
+            remaining_s = total_timeout_s - elapsed_s
             if remaining_s <= 0.5:
                 final_text = final_text or "Sorry, that request took longer than expected. Please try again."
                 break
+
+            # Requirement 1 & 5: On Tier 2 / escalated turns, emit SHORT plan (max 5 steps, JSON) before acting
+            if current_tier >= 2 and not plan_done and self.is_planning_enabled() and remaining_s > 3.0:
+                t_p0 = time.perf_counter()
+                plan_steps = await self._generate_plan(raw_in, tier=current_tier, timeout_s=min(12.0, remaining_s))
+                plan_ms = (time.perf_counter() - t_p0) * 1000
+                plan_done = True
+                if plan_steps:
+                    log_agent("plan", duration_ms=plan_ms, status="ok", steps=len(plan_steps))
+                    await self._emit_event(on_event, {"type": "plan", "steps": plan_steps})
+                    messages.append({
+                        "role": "assistant",
+                        "content": "Execution plan:\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(plan_steps)),
+                    })
 
             step_timeout = min(self.PER_STEP_TIMEOUT_S, remaining_s)
             stream_deltas: List[str] = []
@@ -424,9 +579,49 @@ class AgentOrchestrator:
                 first_token_ms = llm_resp.first_token_ms
 
             if not llm_resp.tool_calls:
-                final_text = (llm_resp.text or "").strip()
-                if not final_text:
-                    final_text = "Done."
+                draft_text = (llm_resp.text or "").strip()
+                if not draft_text:
+                    draft_text = "Done."
+
+                # Requirement 2 & 6: Run ONE self-check call on Tier 2 / escalated turns after tools finish
+                rem_check_s = total_timeout_s - (time.perf_counter() - t0)
+                executed_tools = [t for t in tools_used if t != "escalate"]
+                if (
+                    current_tier >= 2
+                    and executed_tools
+                    and not check_done
+                    and self.is_self_check_enabled()
+                    and rem_check_s > 3.0
+                ):
+                    summary_block = (
+                        "\n".join(tool_result_blocks)[-1500:]
+                        if tool_result_blocks
+                        else f"Executed tools: {', '.join(executed_tools)}"
+                    )
+                    verdict, check_ms = await self._run_self_check(
+                        user_input=raw_in,
+                        draft_text=draft_text,
+                        tool_results_summary=summary_block,
+                        tier=current_tier,
+                        timeout_s=min(10.0, rem_check_s),
+                    )
+                    log_agent("check", duration_ms=check_ms, status="ok", verdict=verdict)
+                    check_done = True
+                    if verdict in ("partial", "wrong") and not recovery_attempted:
+                        recovery_attempted = True
+                        messages.append({"role": "assistant", "content": draft_text})
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Self-check determined the answer was {verdict}. Please make ONE recovery attempt "
+                                "using a different approach (such as a rephrased search query, alternative keywords, or different tool). "
+                                "If the requested information cannot be found or the request cannot be fully satisfied, "
+                                "state honestly what was attempted and what could not be completed."
+                            ),
+                        })
+                        continue
+
+                final_text = draft_text
                 break
 
             # Handle explicit escalation meta-tool first
@@ -445,6 +640,7 @@ class AgentOrchestrator:
 
                 if current_tier < 2:
                     current_tier = 2
+                    max_steps = max(max_steps, self.get_tier2_max_steps())
                     if not exec_calls:
                         messages.append({
                             "role": "assistant",
@@ -522,7 +718,7 @@ class AgentOrchestrator:
 
             # Inspect outcomes
             early_return_prompt: Optional[str] = None
-            tool_result_blocks: List[str] = []
+            step_tool_blocks: List[str] = []
             for tc, res, dur_ms, spec in results_tuples:
                 tool_time_ms += dur_ms
                 tools_used.append(tc.name)
@@ -558,7 +754,9 @@ class AgentOrchestrator:
                 is_untrusted = bool(getattr(spec, "untrusted_result", False))
                 if is_untrusted and tc.name in ("whatsapp_read", "whatsapp_read_messages", "whatsapp_search"):
                     untrusted_taint = True
-                tool_result_blocks.append(fence_tool_result(tc.name, res, untrusted=is_untrusted))
+                fenced = fence_tool_result(tc.name, res, untrusted=is_untrusted)
+                step_tool_blocks.append(fenced)
+                tool_result_blocks.append(fenced)
 
             if early_return_prompt is not None:
                 shaped = shape_response(early_return_prompt, channel=channel)
@@ -575,12 +773,32 @@ class AgentOrchestrator:
                     "should_continue": True, "should_end_session": False, "expect_followup": True,
                 }
 
+            # Requirement 3: Tool-failure recovery
+            tool_had_failure_or_empty = False
+            for tc, res, dur_ms, spec in results_tuples:
+                st = res.get("status")
+                if st in ("error", "failed", "blocked", "timeout", "empty"):
+                    tool_had_failure_or_empty = True
+                elif st == "success":
+                    data = res.get("data") if "data" in res else (res.get("results") if "results" in res else (res.get("response") if "response" in res else res.get("message")))
+                    if data is None or data == "" or data == [] or data == {}:
+                        tool_had_failure_or_empty = True
+
+            recovery_hint = ""
+            if tool_had_failure_or_empty and not tool_recovery_hint_given:
+                tool_recovery_hint_given = True
+                recovery_hint = (
+                    "\n\n[Tool Recovery Hint] One or more tools returned empty or encountered an error. "
+                    "Try ONE alternative approach (such as a rephrased query or alternative tool) before giving up. "
+                    "If no further approach is viable, answer honestly explaining what failed."
+                )
+
             # Feed tool results back into conversation cleanly (compatible across Groq/Gemini/Mistral)
             called_summary = ", ".join(f"{tc.name}({tc.arguments})" for tc in exec_calls)
             messages.append({"role": "assistant", "content": llm_resp.text or f"Calling tools: {called_summary}"})
             messages.append({
                 "role": "user",
-                "content": "Tool execution results:\n" + "\n".join(tool_result_blocks),
+                "content": "Tool execution results:\n" + "\n".join(step_tool_blocks) + recovery_hint,
             })
         else:
             final_text = final_text or "I hit my maximum reasoning steps for that request. Please break it into smaller steps."

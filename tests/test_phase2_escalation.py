@@ -138,7 +138,10 @@ class TestPhase2Escalation(unittest.TestCase):
         async def fake_complete(messages, **kwargs):
             tier = kwargs.get("tier")
             step_calls.append((tier, len(messages)))
-            if len(step_calls) == 1:
+            sys_msg = str(messages[0].get("content", "")) if messages else ""
+            if "planning module" in sys_msg:
+                return LLMResponse(text='{"plan": ["Plan step 1", "Plan step 2"]}', provider="gemini", model="gemini-tier2")
+            if tier == 1:
                 # Step 1 on Tier 1 calls escalate
                 return LLMResponse(
                     tool_calls=[
@@ -147,9 +150,8 @@ class TestPhase2Escalation(unittest.TestCase):
                     provider="groq",
                     model="groq-tier1",
                 )
-            # Step 2 on Tier 2 completes with answer
-            last_msg = messages[-1]["content"]
-            self.assertIn("[Tier Handoff]", last_msg)
+            # Step on Tier 2 completes with answer
+            self.assertTrue(any("[Tier Handoff]" in str(m.get("content", "")) for m in messages))
             return LLMResponse(
                 text="Completed multi-step plan on Tier 2.",
                 tool_calls=[],
@@ -172,9 +174,8 @@ class TestPhase2Escalation(unittest.TestCase):
         ))
 
         self.assertEqual(outcome["tier"], 2)
-        self.assertEqual(len(step_calls), 2)
         self.assertEqual(step_calls[0][0], 1)  # Started on Tier 1
-        self.assertEqual(step_calls[1][0], 2)  # Escalated to Tier 2
+        self.assertEqual(step_calls[-1][0], 2)  # Escalated to Tier 2
         self.assertIn("Completed multi-step plan on Tier 2", outcome["response"])
         self.assertIn("escalate", outcome["tools"])
 

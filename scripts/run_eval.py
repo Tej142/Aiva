@@ -84,6 +84,25 @@ class _StubResearchAgent:
                 "- India scored 284/6 in the first innings and holds a 42-run lead.\n"
                 "- Strong bowling spell reduced Australia to 190/5 at stumps."
             )
+        elif "quantum flux capacitor" in topic.lower():
+            if "schematics" in topic.lower():
+                return {
+                    "status": "empty",
+                    "response": "",
+                    "results": [],
+                    "sources": [],
+                }
+            text = "The quantum flux capacitor is a fictional device from cinema. No real-world blueprints or technical schematics exist."
+        elif "salary records" in topic.lower() or "internal salary" in topic.lower():
+            text = "Public search confirms executive bios and compensation estimates; however, internal payroll and salary records are confidential and not publicly available."
+        elif "vector" in topic.lower():
+            text = (
+                "Top 3 open-source vector databases:\n"
+                "1. Milvus: High-scale benchmark ~15k QPS.\n"
+                "2. Qdrant: Fast Rust-based engine with rich filtering, benchmark ~12k QPS.\n"
+                "3. Chroma: Developer friendly.\n"
+                "Deployment plan: Start with Qdrant for balanced performance."
+            )
         else:
             text = (
                 f"Here is a concise summary of {topic}:\n"
@@ -115,10 +134,26 @@ class _GoldenEvalStubLLM:
         timeout_s: float = 20.0,
         **kwargs: Any,
     ) -> LLMResponse:
+        # Planning module call (Phase 4)
+        if any("planning module" in str(m.get("content", "")).lower() for m in messages):
+            return LLMResponse(
+                text=json.dumps({"plan": ["Search sources and benchmarks", "Analyze comparisons", "Formulate recommendations and plan"]}),
+                provider="stub",
+                model="eval-stub",
+            )
+
+        # Self-check evaluator call (Phase 4)
+        if any("does the draft answer fully answer" in str(m.get("content", "")).lower() or "critical answer evaluator" in str(m.get("content", "")).lower() for m in messages):
+            return LLMResponse(
+                text="verdict: answers",
+                provider="stub",
+                model="eval-stub",
+            )
+
         sys_prompt = messages[0].get("content", "") if messages else ""
         last = messages[-1].get("content", "") if messages else ""
 
-        # Extract original user prompt cleanly (last user message that is not tool results or tier handoff)
+        # Extract original user prompt cleanly (last user message that is not tool results, handoff, or plan/check wrapper)
         orig_query = ""
         for msg in messages:
             content = str(msg.get("content", "")).strip()
@@ -126,6 +161,9 @@ class _GoldenEvalStubLLM:
                 msg.get("role") == "user"
                 and not content.startswith("Tool execution results:")
                 and not content.startswith("[Tier Handoff]")
+                and not content.startswith("Task:")
+                and not content.startswith("User request:")
+                and not content.startswith("Self-check determined")
             ):
                 orig_query = content
 
@@ -134,6 +172,19 @@ class _GoldenEvalStubLLM:
         # Round 2: Follow-up after tool execution results
         if str(last).startswith("Tool execution results:"):
             history_blob = "".join(str(m.get("content", "")) for m in messages)
+            # Handle empty search recovery for quantum flux capacitor
+            if "quantum flux capacitor" in low and "[Tool Recovery Hint]" in last and "fictional background" not in history_blob:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            id="tc_qfc_rec",
+                            name="web_research",
+                            arguments={"query": "quantum flux capacitor fictional background"},
+                        )
+                    ],
+                    provider="stub",
+                    model="eval-stub",
+                )
             # Handle multi-step compound search + send ("search X and send to ...")
             if (
                 re.search(r"\b(search|research)\b", low)
@@ -347,6 +398,26 @@ class _GoldenEvalStubLLM:
                 model="eval-stub",
             )
 
+        # Phase 4 Plan -> Act -> Check tasks
+        if "vector database" in low or ("vector" in low and "benchmark" in low):
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_vec", name="web_research", arguments={"query": "open-source vector databases benchmarks"})],
+                provider="stub",
+                model="eval-stub",
+            )
+        if "quantum flux capacitor" in low:
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_qfc", name="web_research", arguments={"query": "quantum flux capacitor schematics"})],
+                provider="stub",
+                model="eval-stub",
+            )
+        if "salary records" in low or "internal salary" in low:
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_sal", name="web_research", arguments={"query": "OpenAI executive salary records"})],
+                provider="stub",
+                model="eval-stub",
+            )
+
         # Device / Tanglish device actions
         if "list running apps" in low:
             return LLMResponse(tool_calls=[LLMToolCall(id="tc_apps", name="file_access", arguments={"action": "list_apps"})])
@@ -527,6 +598,19 @@ class _GoldenEvalStubLLM:
             if m_msg:
                 return m_msg[-1]
         if 'name="web_research"' in tool_block:
+            low_orig = orig_query.lower()
+            if "vector database" in low_orig or ("vector" in low_orig and "benchmark" in low_orig):
+                return (
+                    "Here is the benchmark comparison and deployment plan for top 3 open-source vector databases:\n"
+                    "1. Milvus: High-scale benchmark ~15k QPS.\n"
+                    "2. Qdrant: Fast Rust-based engine with rich filtering, benchmark ~12k QPS.\n"
+                    "3. Chroma: Developer friendly.\n"
+                    "Deployment plan: Start with Qdrant for balanced performance."
+                )
+            if "quantum flux capacitor" in low_orig:
+                return "I searched for quantum flux capacitor schematics; however, no verified engineering schematics exist as it is a fictional concept from cinema."
+            if "salary records" in low_orig or "internal salary" in low_orig:
+                return "I searched for executive records; however, private internal salary records are strictly confidential and not publicly available on the web."
             return f"Here is the verified summary for '{orig_query}': key updates were retrieved cleanly from trusted sources."
         if m_msg:
             return " ".join(m_msg)
