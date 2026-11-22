@@ -565,6 +565,9 @@ function initNavigation() {
             if (targetTab === 'memory-view') {
                 loadMemoryData();
             }
+            if (targetTab === 'system-view') {
+                loadAgentFeedbackList();
+            }
             if (targetTab === 'whatsapp-view') {
                 loadWhatsAppStatus();
                 loadWhatsAppContacts();
@@ -857,6 +860,16 @@ async function sendUserMessage(query) {
                     if (existingDrawer) existingDrawer.remove();
                     bodyEl.insertAdjacentHTML('beforeend', renderSourcesDrawer(sources));
                 }
+                if (bodyEl && !bodyEl.querySelector('.msg-feedback')) {
+                    bodyEl.insertAdjacentHTML('beforeend', renderFeedbackBlock());
+                    attachFeedbackHandlers(msgDiv, {
+                        userQuery: query,
+                        assistantReply: reply,
+                        tier: payload.tier || 1,
+                        tag: tag || 'conversation',
+                        tools: payload.tools || [],
+                    });
+                }
                 if (tag) updateWorkflowVisualizer(query, tag, reply);
                 if (payload.screenshot_base64) updateVisionSnapshot(payload.screenshot_base64);
 
@@ -1015,6 +1028,9 @@ function appendChatMessage(sender, text, customId = null, routeTag = null, sourc
         ? `<div class="msg-text">${escapeHtml(text)}</div>`
         : `<div class="msg-text">${renderMarkdown(text)}</div>`;
     const sourcesHtml = sender !== 'user' ? renderSourcesDrawer(sources) : '';
+    const feedbackHtml = (sender !== 'user' && (!customId || !customId.startsWith('stream-')))
+        ? renderFeedbackBlock()
+        : '';
 
     msgDiv.innerHTML = `
         <div class="msg-avatar">${avatarText}</div>
@@ -1025,12 +1041,179 @@ function appendChatMessage(sender, text, customId = null, routeTag = null, sourc
             </div>
             ${formattedContent}
             ${sourcesHtml}
+            ${feedbackHtml}
         </div>
     `;
 
     container.appendChild(msgDiv);
     container.scrollTop = container.scrollHeight;
+
+    if (sender !== 'user' && feedbackHtml) {
+        attachFeedbackHandlers(msgDiv, {
+            userQuery: '',
+            assistantReply: text,
+            tier: 1,
+            tag: routeTag || 'conversation',
+            tools: [],
+        });
+    }
+
     return msgDiv;
+}
+
+function renderFeedbackBlock() {
+    return `
+        <div class="msg-feedback">
+            <button type="button" class="msg-feedback-btn fb-up" title="Helpful response">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+                <span>Helpful</span>
+            </button>
+            <button type="button" class="msg-feedback-btn fb-down" title="Report issue with response">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>
+                <span>Issues</span>
+            </button>
+            <span class="msg-feedback-status"></span>
+        </div>
+    `;
+}
+
+function attachFeedbackHandlers(msgDiv, exchangeData) {
+    if (!msgDiv) return;
+    const fbContainer = msgDiv.querySelector('.msg-feedback');
+    if (!fbContainer || fbContainer.dataset.bound === 'true') return;
+    fbContainer.dataset.bound = 'true';
+
+    const btnUp = fbContainer.querySelector('.fb-up');
+    const btnDown = fbContainer.querySelector('.fb-down');
+    const statusEl = fbContainer.querySelector('.msg-feedback-status');
+
+    if (btnUp) {
+        btnUp.addEventListener('click', async () => {
+            btnUp.classList.add('active-up');
+            if (btnDown) btnDown.classList.remove('active-down');
+            if (statusEl) statusEl.textContent = 'Thanks!';
+            try {
+                await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({
+                        user_message: exchangeData.userQuery || '',
+                        assistant_reply: exchangeData.assistantReply || '',
+                        tier: exchangeData.tier || 1,
+                        tag: exchangeData.tag || 'conversation',
+                        tools: exchangeData.tools || [],
+                        rating: 'thumbs_up',
+                    }),
+                });
+            } catch (err) {
+                console.error('Failed to submit thumbs-up:', err);
+            }
+        });
+    }
+
+    if (btnDown) {
+        btnDown.addEventListener('click', async () => {
+            btnDown.classList.add('active-down');
+            if (btnUp) btnUp.classList.remove('active-up');
+            const note = prompt('What went wrong with this response? (Optional short note)') || '';
+            if (statusEl) statusEl.textContent = 'Reported';
+            try {
+                await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({
+                        user_message: exchangeData.userQuery || '',
+                        assistant_reply: exchangeData.assistantReply || '',
+                        tier: exchangeData.tier || 1,
+                        tag: exchangeData.tag || 'conversation',
+                        tools: exchangeData.tools || [],
+                        note: note,
+                        rating: 'thumbs_down',
+                    }),
+                });
+                showHudToast('Feedback saved. You can review issues in System View.', 'info');
+                loadAgentFeedbackList();
+            } catch (err) {
+                console.error('Failed to submit thumbs-down:', err);
+            }
+        });
+    }
+}
+
+async function loadAgentFeedbackList() {
+    const container = document.getElementById('feedback-list-container');
+    if (!container) return;
+
+    try {
+        const resp = await fetch('/api/agent/feedback', { headers: authHeaders() });
+        if (!resp.ok) {
+            container.innerHTML = '<div class="placeholder-text">Failed to load feedback records.</div>';
+            return;
+        }
+        const data = await resp.json();
+        const items = data.items || [];
+        if (!items.length) {
+            container.innerHTML = '<div class="placeholder-text">No thumbs-down feedback recorded yet.</div>';
+            return;
+        }
+
+        container.innerHTML = items.map(item => `
+            <div class="feedback-item" id="fb-item-${item.id}">
+                <div class="feedback-item-header">
+                    <span>#${item.id} • Tier ${item.tier} • ${escapeHtml(item.tag)}</span>
+                    <div style="display: flex; gap: var(--space-2); align-items: center;">
+                        <span>${new Date(item.created_at * 1000).toLocaleString()}</span>
+                        <button type="button" class="btn btn-danger" style="padding: 2px 6px; font-size: var(--font-size-xs, 10px);" onclick="deleteFeedbackItem(${item.id})">Delete</button>
+                    </div>
+                </div>
+                <div class="feedback-item-body">
+                    <strong>User:</strong> ${escapeHtml(item.user_message)}
+                </div>
+                <div class="feedback-item-reply">
+                    <strong>Reply:</strong> ${escapeHtml(item.assistant_reply.substring(0, 160))}${item.assistant_reply.length > 160 ? '...' : ''}
+                </div>
+                ${item.note ? `<div style="font-size: var(--font-size-xs, 11px); color: var(--text-2);"><em>Note:</em> ${escapeHtml(item.note)}</div>` : ''}
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error('Error loading feedback list:', err);
+        container.innerHTML = '<div class="placeholder-text">Network error loading feedback.</div>';
+    }
+}
+
+async function deleteFeedbackItem(id) {
+    if (!confirm(`Delete feedback record #${id}?`)) return;
+    try {
+        const resp = await fetch(`/api/agent/feedback/${id}`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+        });
+        if (resp.ok) {
+            showHudToast(`Feedback #${id} deleted.`, 'info');
+            loadAgentFeedbackList();
+        } else {
+            showHudToast('Failed to delete feedback record.', 'warning');
+        }
+    } catch (err) {
+        console.error('Error deleting feedback item:', err);
+    }
+}
+
+async function clearAllFeedback() {
+    if (!confirm('Clear all thumbs-down feedback records for your account?')) return;
+    try {
+        const resp = await fetch('/api/agent/feedback', {
+            method: 'DELETE',
+            headers: authHeaders(),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showHudToast(`Cleared ${data.deleted_count || 0} feedback record(s).`, 'info');
+            loadAgentFeedbackList();
+        }
+    } catch (err) {
+        console.error('Error clearing feedback:', err);
+    }
 }
 
 function removeTempMessage(id) {
@@ -3191,4 +3374,13 @@ document.addEventListener('DOMContentLoaded', () => {
     initWaGateOverlay();
     initAdminPanel();
     bindContactExtraToggles();
+
+    const btnRefreshFb = document.getElementById('btn-refresh-feedback');
+    if (btnRefreshFb) {
+        btnRefreshFb.addEventListener('click', loadAgentFeedbackList);
+    }
+    const btnClearFb = document.getElementById('btn-clear-all-feedback');
+    if (btnClearFb) {
+        btnClearFb.addEventListener('click', clearAllFeedback);
+    }
 });

@@ -427,6 +427,21 @@
                         <li><span class="cap-badge">whatsapp_lookup_contact</span> Contact alias &amp; phone resolution</li>
                     </ul>
                 </div>
+                <div class="monitor-card glass-panel feedback-card" id="agent-feedback-panel" style="grid-column: 1 / -1;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0;">Agent Feedback Review</h3>
+                        <div style="display: flex; gap: var(--space-2);">
+                            <button type="button" class="btn btn-secondary" id="btn-refresh-feedback" style="padding: 4px 10px; font-size: var(--font-size-xs, 12px);">Refresh</button>
+                            <button type="button" class="btn btn-danger" id="btn-clear-all-feedback" style="padding: 4px 10px; font-size: var(--font-size-xs, 12px);">Clear All</button>
+                        </div>
+                    </div>
+                    <p style="font-size: var(--font-size-xs, 12px); color: var(--text-2); margin: 0;">
+                        Review logged thumbs-down failure exchanges for your account. Export candidate entries using <code>python scripts/failures_to_golden.py</code>.
+                    </p>
+                    <div id="feedback-list-container" class="admin-list" style="max-height: 280px; overflow-y: auto;">
+                        <div class="placeholder-text">No thumbs-down feedback recorded yet.</div>
+                    </div>
+                </div>
             </div>
         </section>
 

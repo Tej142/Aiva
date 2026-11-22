@@ -295,6 +295,21 @@ class DatabaseService:
         );
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_user ON agent_telemetry(user_id);
         CREATE INDEX IF NOT EXISTS idx_agent_telemetry_created ON agent_telemetry(created_at);
+
+        CREATE TABLE IF NOT EXISTS agent_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            assistant_reply TEXT NOT NULL,
+            tier INTEGER DEFAULT 1,
+            tag TEXT DEFAULT 'conversation',
+            tools TEXT DEFAULT '[]',
+            note TEXT DEFAULT '',
+            rating TEXT DEFAULT 'thumbs_down',
+            created_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_feedback_user ON agent_feedback(user_id, created_at DESC);
         """)
         self._ensure_whatsapp_messages_schema(cursor)
         self._ensure_whatsapp_rbac_schema(cursor)
@@ -394,6 +409,23 @@ class DatabaseService:
         """)
         self._ensure_whatsapp_messages_schema(cursor)
         self._ensure_whatsapp_rbac_schema(cursor)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            assistant_reply TEXT NOT NULL,
+            tier INTEGER DEFAULT 1,
+            tag TEXT DEFAULT 'conversation',
+            tools TEXT DEFAULT '[]',
+            note TEXT DEFAULT '',
+            rating TEXT DEFAULT 'thumbs_down',
+            created_at REAL NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_agent_feedback_user ON agent_feedback(user_id, created_at DESC);")
 
         # Idempotent new columns on existing WhatsApp tables
         self._ensure_column(cursor, "whatsapp_links", "session_state", "TEXT NOT NULL DEFAULT 'INACTIVE'")
@@ -1493,6 +1525,95 @@ class DatabaseService:
                 (float(since), int(limit)),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # -------------------------------------------------------------
+    # AGENT FEEDBACK (USER-VISIBLE, SCOPED BY USER_ID)
+    # -------------------------------------------------------------
+    def save_agent_feedback(
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_reply: str,
+        tier: int = 1,
+        tag: str = "conversation",
+        tools: Optional[List[str]] = None,
+        note: str = "",
+        rating: str = "thumbs_down",
+    ) -> int:
+        """Store user feedback (thumbs down/up) exchange scoped strictly to user_id."""
+        conn = self.get_connection()
+        tools_json = json.dumps(tools or [])
+        now = time.time()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO agent_feedback
+               (user_id, user_message, assistant_reply, tier, tag, tools, note, rating, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, user_message, assistant_reply, int(tier), tag, tools_json, note or "", rating, now),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+    def get_agent_feedback(
+        self,
+        user_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve feedback items strictly for the authenticated user_id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, user_id, user_message, assistant_reply, tier, tag, tools, note, rating, created_at
+               FROM agent_feedback
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT ? OFFSET ?""",
+            (user_id, int(limit), int(offset)),
+        )
+        rows = cursor.fetchall()
+        result = []
+        for r in rows:
+            tools_val = []
+            try:
+                tools_val = json.loads(r["tools"]) if r["tools"] else []
+            except Exception:
+                tools_val = [t.strip() for t in str(r["tools"]).split(",") if t.strip()]
+            result.append({
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "user_message": r["user_message"],
+                "assistant_reply": r["assistant_reply"],
+                "tier": r["tier"],
+                "tag": r["tag"],
+                "tools": tools_val,
+                "note": r["note"] or "",
+                "rating": r["rating"],
+                "created_at": r["created_at"],
+            })
+        return result
+
+    def delete_agent_feedback_item(self, user_id: str, feedback_id: int) -> bool:
+        """Delete a single feedback item strictly if it belongs to user_id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM agent_feedback WHERE id = ? AND user_id = ?",
+            (int(feedback_id), user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_all_agent_feedback(self, user_id: str) -> int:
+        """Delete all feedback items belonging to user_id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM agent_feedback WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     # -------------------------------------------------------------
     # WHATSAPP MESSAGES STORE & FTS5 SEARCH (SCOPED BY USER_ID)

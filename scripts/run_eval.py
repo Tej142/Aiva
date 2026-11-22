@@ -669,11 +669,65 @@ def _evaluate_case(case: Dict[str, Any], outcome: Dict[str, Any], spies: _SpyCap
     return len(reasons) == 0, reasons
 
 
+async def _run_llm_judge(
+    llm_gateway: Any,
+    query: str,
+    answer: str,
+    model: Optional[str] = None,
+) -> Dict[str, float]:
+    """Score answer quality 1-5 against the short rubric (correct, complete, concise, honest)."""
+    judge_model = model or os.getenv("AIVA_JUDGE_MODEL", "llama-3.1-8b-instant")
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "You are an impartial evaluator judging AI assistant answers. "
+                "Score the answer on 4 criteria from 1 (terrible) to 5 (excellent):\n"
+                "1. correct: Is the information factual and accurate?\n"
+                "2. complete: Does it fulfill the user's intent?\n"
+                "3. concise: Is it direct and free of fluff?\n"
+                "4. honest: Does it avoid hallucinations or overpromising?\n\n"
+                "Respond ONLY with a JSON object in this format:\n"
+                '{"correct": 5, "complete": 5, "concise": 4, "honest": 5, "overall": 4.75}'
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"User query: {query}\n\nAssistant answer: {answer}",
+        },
+    ]
+    try:
+        resp = await llm_gateway.complete(
+            prompt,
+            tier=1,
+            reasoning_effort="low",
+            stream=False,
+            timeout_s=15.0,
+        )
+        text = (resp.text or "").strip()
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            data = json.loads(m.group(0))
+            return {
+                "correct": float(data.get("correct", 3)),
+                "complete": float(data.get("complete", 3)),
+                "concise": float(data.get("concise", 3)),
+                "honest": float(data.get("honest", 3)),
+                "overall": float(data.get("overall", 3.0)),
+            }
+    except Exception:
+        pass
+    return {"correct": 3.0, "complete": 3.0, "concise": 3.0, "honest": 3.0, "overall": 3.0}
+
+
 async def run_eval_async(
     dataset_path: str,
     live: bool = False,
     limit: Optional[int] = None,
     delay_ms: int = 0,
+    judge: bool = False,
+    judge_model: Optional[str] = None,
+    judge_delay_s: float = 1.0,
 ) -> Dict[str, Any]:
     with open(dataset_path, "r", encoding="utf-8") as fh:
         payload = yaml.safe_load(fh)
@@ -863,6 +917,17 @@ async def run_eval_async(
             if ok:
                 by_category[cat]["passed"] += 1
 
+            judge_score = None
+            if live and judge and outcome.get("response"):
+                judge_score = await _run_llm_judge(
+                    orchestrator.llm_gateway,
+                    case["query"],
+                    outcome["response"],
+                    model=judge_model,
+                )
+                if judge_delay_s > 0 and idx + 1 < len(cases):
+                    await asyncio.sleep(judge_delay_s)
+
             results.append({
                 "id": case.get("id"),
                 "category": cat,
@@ -872,6 +937,7 @@ async def run_eval_async(
                 "tier": outcome.get("tier"),
                 "route": outcome.get("route"),
                 "tools": outcome.get("tools", []),
+                "judge_score": judge_score,
             })
             if delay_ms > 0 and idx + 1 < len(cases):
                 await asyncio.sleep(delay_ms / 1000.0)
@@ -910,7 +976,20 @@ async def run_eval_async(
         for cat, counts in by_category.items()
     }
 
-    return {
+    judge_summary = None
+    if live and judge:
+        scored = [r["judge_score"] for r in results if r.get("judge_score")]
+        if scored:
+            judge_summary = {
+                "overall": round(sum(s["overall"] for s in scored) / len(scored), 2),
+                "correct": round(sum(s["correct"] for s in scored) / len(scored), 2),
+                "complete": round(sum(s["complete"] for s in scored) / len(scored), 2),
+                "concise": round(sum(s["concise"] for s in scored) / len(scored), 2),
+                "honest": round(sum(s["honest"] for s in scored) / len(scored), 2),
+                "evaluated_count": len(scored),
+            }
+
+    ret: Dict[str, Any] = {
         "mode": "live" if live else "stub",
         "total": total_n,
         "passed": passed_n,
@@ -923,6 +1002,9 @@ async def run_eval_async(
         "categories": cat_summary,
         "failures": [r for r in results if not r["passed"]],
     }
+    if judge_summary:
+        ret["judge"] = judge_summary
+    return ret
 
 
 def main():
@@ -933,13 +1015,35 @@ def main():
         help="Path to golden commands YAML dataset.",
     )
     parser.add_argument("--live", action="store_true", help="Use real configured LLMGateway instead of stub.")
+    parser.add_argument("--judge", action="store_true", help="Use an LLM judge to score live responses (rubric: correct, complete, concise, honest).")
+    parser.add_argument(
+        "--judge-model",
+        default=os.getenv("AIVA_JUDGE_MODEL", "llama-3.1-8b-instant"),
+        help="Configurable cheap judge model for live evaluation.",
+    )
+    parser.add_argument(
+        "--judge-delay-s",
+        type=float,
+        default=float(os.getenv("AIVA_JUDGE_DELAY_S", "1.0")),
+        help="Pacing delay in seconds between judge LLM calls.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Evaluate a stratified sample of N cases.")
     parser.add_argument("--delay-ms", type=int, default=0, help="Delay between cases in ms (helpful for live API rate limits).")
     parser.add_argument("--min-accuracy", type=float, default=0.90, help="Minimum pass ratio required for exit 0.")
     parser.add_argument("--json", action="store_true", help="Output full JSON report.")
     args = parser.parse_args()
 
-    report = asyncio.run(run_eval_async(args.dataset, live=args.live, limit=(args.limit or None), delay_ms=args.delay_ms))
+    report = asyncio.run(
+        run_eval_async(
+            args.dataset,
+            live=args.live,
+            limit=(args.limit or None),
+            delay_ms=args.delay_ms,
+            judge=args.judge,
+            judge_model=args.judge_model,
+            judge_delay_s=args.judge_delay_s,
+        )
+    )
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -949,6 +1053,13 @@ def main():
         )
         for cat, st in report["categories"].items():
             print(f"  - {cat:30s} {st['passed']:2d}/{st['total']:2d} ({st['accuracy'] * 100:5.1f}%)")
+        if report.get("judge"):
+            j = report["judge"]
+            print(
+                f"[Judge Evaluation] overall={j['overall']:.2f}/5.0 (correct={j['correct']:.2f}, "
+                f"complete={j['complete']:.2f}, concise={j['concise']:.2f}, honest={j['honest']:.2f}) "
+                f"evaluated={j['evaluated_count']}"
+            )
         if report["failures"]:
             print("Failures:")
             for fail in report["failures"]:

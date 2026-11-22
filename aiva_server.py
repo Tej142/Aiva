@@ -779,6 +779,82 @@ def api_telemetry(user):
     return jsonify({"status": "success", "data": summary})
 
 
+# =====================================================================
+# AGENT FEEDBACK REST APIS (Phase 6: Thumbs up / down per-user feedback)
+# =====================================================================
+@app.route("/api/feedback", methods=["POST"])
+@app.route("/api/agent/feedback", methods=["POST"])
+@require_auth
+def api_save_feedback(user):
+    """Store thumbs-down (or thumbs-up) exchange strictly for the authenticated user_id."""
+    data = request.get_json(silent=True) or {}
+    user_msg = str(data.get("user_message") or data.get("query") or "").strip()
+    assistant_reply = str(data.get("assistant_reply") or data.get("response") or "").strip()
+    tier = int(data.get("tier", 1))
+    tag = str(data.get("tag", "conversation"))
+    tools = data.get("tools") or []
+    note = str(data.get("note") or "").strip()
+    rating = str(data.get("rating", "thumbs_down")).lower().strip()
+
+    if rating not in ("thumbs_up", "thumbs_down"):
+        rating = "thumbs_down"
+
+    # Requirement 2: Thumbs-down stores ONLY that exchange in SQLite table agent_feedback.
+    # Mask phone numbers before storing. Never store secrets (reuse core/memory/safety.py filters).
+    if rating == "thumbs_down":
+        from core.agent.feedback_safety import sanitize_feedback_text
+        safe_user_msg = sanitize_feedback_text(user_msg)
+        safe_assistant_reply = sanitize_feedback_text(assistant_reply)
+        safe_note = sanitize_feedback_text(note)
+
+        feedback_id = db.save_agent_feedback(
+            user_id=user["id"],
+            user_message=safe_user_msg,
+            assistant_reply=safe_assistant_reply,
+            tier=tier,
+            tag=tag,
+            tools=tools,
+            note=safe_note,
+            rating=rating,
+        )
+        return jsonify({"status": "success", "id": feedback_id, "rating": rating, "message": "Feedback saved."})
+    else:
+        # Thumbs-up acknowledges without polluting the failure review store
+        return jsonify({"status": "success", "rating": "thumbs_up", "message": "Feedback acknowledged."})
+
+
+@app.route("/api/agent/feedback", methods=["GET"])
+@require_auth
+def api_list_feedback(user):
+    """List agent feedback items strictly for the authenticated user_id."""
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 100))))
+        offset = max(0, int(request.args.get("offset", 0)))
+    except Exception:
+        limit, offset = 100, 0
+    items = db.get_agent_feedback(user["id"], limit=limit, offset=offset)
+    return jsonify({"status": "success", "items": items})
+
+
+@app.route("/api/agent/feedback/<int:feedback_id>", methods=["DELETE"])
+@require_auth
+def api_delete_feedback_item(user, feedback_id):
+    """Delete a single feedback item strictly if owned by the authenticated user."""
+    ok = db.delete_agent_feedback_item(user["id"], feedback_id)
+    if not ok:
+        return jsonify({"status": "error", "error": "Feedback item not found"}), 404
+    return jsonify({"status": "success", "deleted": True, "id": feedback_id})
+
+
+@app.route("/api/agent/feedback", methods=["DELETE"])
+@require_auth
+def api_clear_feedback(user):
+    """Delete all feedback items strictly for the authenticated user."""
+    deleted_count = db.delete_all_agent_feedback(user["id"])
+    return jsonify({"status": "success", "deleted_count": deleted_count})
+
+
+
 @app.route("/api/status", methods=["GET"])
 def api_status():
     """System health, key pool count, kernel status, and optional per-user telemetry."""
