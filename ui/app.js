@@ -701,6 +701,14 @@ async function fetchChatFallback(query, msgDiv, textEl) {
     if (data.status === 'success' || data.response) {
         const reply = data.response || 'Command executed successfully.';
         const sources = Array.isArray(data.sources) ? data.sources : [];
+        const senderEl = msgDiv.querySelector('.msg-sender');
+        if (senderEl && (data.route || data.tag || data.path)) {
+            const tag = data.tag || data.route || null;
+            const path = data.path || null;
+            const tagHtml = tag ? `<span class="tag-pill">${escapeHtml(tag)}</span>` : '';
+            const pathHtml = path ? `<span class="tag-pill path-pill" title="Execution Path: ${escapeHtml(path)}">${escapeHtml(path)}</span>` : '';
+            senderEl.innerHTML = `AIVA ${tagHtml} ${pathHtml}`.trim();
+        }
         textEl.innerHTML = renderMarkdown(reply);
         if (sources.length) {
             const bodyEl = msgDiv.querySelector('.msg-body');
@@ -834,10 +842,12 @@ async function sendUserMessage(query) {
                 const reply = payload.response || streamedText || 'Command executed successfully.';
                 const sources = Array.isArray(payload.sources) ? payload.sources : [];
                 const tag = payload.tag || payload.route || null;
+                const path = payload.path || null;
 
                 if (senderEl) {
                     const tagHtml = tag ? `<span class="tag-pill">${escapeHtml(tag)}</span>` : '';
-                    senderEl.innerHTML = `AIVA ${tagHtml}`;
+                    const pathHtml = path ? `<span class="tag-pill path-pill" title="Execution Path: ${escapeHtml(path)}">${escapeHtml(path)}</span>` : '';
+                    senderEl.innerHTML = `AIVA ${tagHtml} ${pathHtml}`.trim();
                 }
                 if (textEl) {
                     textEl.innerHTML = renderMarkdown(reply);
@@ -1850,6 +1860,18 @@ async function pollSystemStatus() {
             const apiLabel = document.getElementById('api-status-label');
             if (apiLabel && data.key_count) {
                 apiLabel.textContent = `Pools: ${data.key_count} Keys Active`;
+            }
+            const coreEl = document.getElementById('stat-agent-core');
+            const coreSubEl = document.getElementById('stat-agent-core-sub');
+            if (coreEl) {
+                const isOn = Boolean(data.agent_core ?? data.agent_core_enabled);
+                coreEl.textContent = isOn ? 'ON' : 'OFF';
+                coreEl.className = 'stat-val ' + (isOn ? 'text-green' : 'text-muted');
+                if (coreSubEl) {
+                    coreSubEl.textContent = `Agent Core: ${isOn ? 'ON' : 'OFF'}`;
+                }
+                const box = document.getElementById('stat-box-agent-core');
+                if (box) box.setAttribute('title', `Agent Core: ${isOn ? 'ON' : 'OFF'}`);
             }
             if (data.telemetry) {
                 updateTelemetryCards(data.telemetry);

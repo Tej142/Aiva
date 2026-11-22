@@ -40,6 +40,28 @@ def log_agent(stage: str, duration_ms: float = 0.0, status: str = "ok", **fields
     return line
 
 
+def log_agent_startup(
+    agent_core: Optional[bool] = None,
+    tier1_models: Optional[List[str]] = None,
+    tier2_models: Optional[List[str]] = None,
+) -> str:
+    """Emit structured startup log: [Agent] stage=startup agent_core=<on|off> tier1_models=<list> tier2_models=<list> (no keys)."""
+    from core.agent import is_agent_core_enabled
+    from core.agent.llm_gateway import LLMGateway
+
+    core_enabled = is_agent_core_enabled() if agent_core is None else bool(agent_core)
+    t1 = list(tier1_models) if tier1_models is not None else LLMGateway.get_tier1_models()
+    t2 = list(tier2_models) if tier2_models is not None else LLMGateway.get_tier2_models()
+    return log_agent(
+        stage="startup",
+        duration_ms=0.0,
+        status="ok",
+        agent_core="on" if core_enabled else "off",
+        tier1_models=t1,
+        tier2_models=t2,
+    )
+
+
 def percentile(values: List[float], p: float) -> float:
     """Compute exact p-th percentile (0..100) using linear interpolation."""
     clean = sorted(float(v) for v in values if v is not None and float(v) >= 0.0)

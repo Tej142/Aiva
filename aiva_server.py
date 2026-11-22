@@ -422,6 +422,7 @@ def _build_chat_response_payload(
     *,
     sources: list = None,
     tts_first_audio_ms: float = 0.0,
+    path: Optional[str] = None,
 ) -> dict:
     """Build normalized non-stream / stream final payload with optional screenshot capture."""
     reply_text = result.get("response", "Done.")
@@ -431,6 +432,7 @@ def _build_chat_response_payload(
     if tts_first_audio_ms > 0 and "tts_first_audio_ms" not in timings:
         timings["tts_first_audio_ms"] = round(tts_first_audio_ms, 1)
 
+    active_path = str(path or result.get("path") or ("agent_core" if is_agent_core_enabled() else "legacy"))
     payload = {
         "status": "success",
         "query": msg,
@@ -440,6 +442,7 @@ def _build_chat_response_payload(
         "route": result.get("route", "general"),
         "tag": result.get("tag") or ("task" if tools else "conversation"),
         "tier": int(result.get("tier", _infer_legacy_tier(result.get("route", "general")))),
+        "path": active_path,
         "tools": tools,
         "timings": timings,
         "should_end_session": bool(result.get("should_end_session", False)),
@@ -511,7 +514,8 @@ def api_chat():
                 )
             )
 
-        response_data = _build_chat_response_payload(msg, result)
+        active_path = "agent_core" if used_agent_core else "legacy"
+        response_data = _build_chat_response_payload(msg, result, path=active_path)
         reply_text = response_data["response"]
 
         # Synthesize neural voice audio (Edge TTS) for client playback
@@ -555,7 +559,7 @@ def api_chat():
                 success=True,
             )
 
-        log_agent("http_chat", total_ms, "ok", tier=response_data["tier"], tag=response_data["tag"])
+        log_agent("http_chat", total_ms, "ok", tier=response_data["tier"], tag=response_data["tag"], path=active_path)
         return jsonify(response_data)
     except Exception as e:
         log_agent("http_chat", round((time.perf_counter() - t0) * 1000, 1), "error", err=type(e).__name__)
@@ -693,12 +697,15 @@ def api_chat_stream():
             await tts_task
 
             total_ms = round((time.perf_counter() - t0) * 1000, 1)
+            active_path = "agent_core" if used_agent_core else "legacy"
             payload = _build_chat_response_payload(
                 msg,
                 result,
                 sources=raw_sources,
                 tts_first_audio_ms=tts_first_audio_ms,
+                path=active_path,
             )
+            payload["path"] = active_path
             if "total_ms" not in payload["timings"]:
                 payload["timings"]["total_ms"] = total_ms
 
@@ -720,6 +727,7 @@ def api_chat_stream():
                 "ok",
                 tier=payload["tier"],
                 tag=payload["tag"],
+                path=active_path,
                 tts_chunks=tts_chunk_idx,
             )
             event_q.put(("final", payload))
@@ -775,6 +783,10 @@ def api_telemetry(user):
 def api_status():
     """System health, key pool count, kernel status, and optional per-user telemetry."""
     online_count = len(device_channel._connections) if device_channel else 0
+    from core.agent.llm_gateway import LLMGateway
+    core_enabled = is_agent_core_enabled()
+    t1_models = LLMGateway.get_tier1_models()
+    t2_models = LLMGateway.get_tier2_models()
     payload = {
         "status": "online",
         "kernel_running": kernel is not None and kernel.running,
@@ -785,7 +797,14 @@ def api_status():
             "gemini": 5,
             "mistral": 5
         },
-        "agent_core_enabled": is_agent_core_enabled(),
+        "agent_core": core_enabled,
+        "agent_core_enabled": core_enabled,
+        "tier1_models": t1_models,
+        "tier2_models": t2_models,
+        "active_tier_models": {
+            "tier1": t1_models,
+            "tier2": t2_models,
+        },
         "voice_engine": "Microsoft Edge Neural (en-IN-PrabhatNeural)",
     }
     auth_user = get_authenticated_user()

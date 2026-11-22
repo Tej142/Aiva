@@ -1027,6 +1027,11 @@ class AIVAKernel:
         print(
             "[AIVA] Runtime kernel started"
         )
+        try:
+            from core.agent import log_agent_startup
+            log_agent_startup()
+        except Exception:
+            pass
         await asyncio.sleep(0.2)
 
     async def start(self, voice_mode: bool = False, all_voice_mode: bool = False, adaptive_voice: bool = True):

@@ -9,5 +9,10 @@ def is_agent_core_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-__all__ = ["is_agent_core_enabled"]
+def log_agent_startup(*args, **kwargs):
+    from core.agent.telemetry import log_agent_startup as _startup
+    return _startup(*args, **kwargs)
+
+
+__all__ = ["is_agent_core_enabled", "log_agent_startup"]
 

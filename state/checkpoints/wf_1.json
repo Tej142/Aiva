@@ -1,0 +1,16 @@
+{
+  "workflow_id": "wf_1",
+  "current_step": "step1",
+  "state": {
+    "status": "RUNNING",
+    "completed": [
+      "step1"
+    ],
+    "active": [],
+    "failed": []
+  },
+  "waiting": false,
+  "wait_reason": null,
+  "completed": false,
+  "timestamp": 1795324408.0079887
+}

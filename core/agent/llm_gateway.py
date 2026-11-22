@@ -96,6 +96,14 @@ class LLMGateway:
     TIER2_GROQ_MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
     MISTRAL_MODELS = ("mistral-small-latest",)
 
+    @classmethod
+    def get_tier1_models(cls) -> List[str]:
+        return list(cls.TIER1_GROQ_MODELS)
+
+    @classmethod
+    def get_tier2_models(cls) -> List[str]:
+        return list(cls.TIER2_GEMINI_MODELS)
+
     def __init__(self, secrets: Optional[Dict[str, Any]] = None):
         cfg = secrets if secrets is not None else load_secrets()
         self.groq_keys: List[str] = list(cfg.get("groq_api_keys") or [])
