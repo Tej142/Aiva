@@ -1,11 +1,14 @@
 """Built-in AIVA tool definitions wrapping existing capabilities, memory, research, and WhatsApp."""
 
+import asyncio
 import inspect
 from typing import Any, Dict, Optional
 
 from core.agent.policy import RISK_CONFIRM, RISK_LOW, RISK_READ
 from core.agent.telemetry import normalize_escalation_reason
+from core.agent.tools.calculator import safe_calculate
 from core.agent.tools.registry import ToolContext, ToolRegistry, ToolSpec
+from core.agent.tools.web_fetch import fetch_url_safely
 
 
 def _require_user(ctx: ToolContext) -> Optional[Dict[str, Any]]:
@@ -951,6 +954,71 @@ def register_builtin_tools(
         timeout_s=2.0,
         parallel_safe=False,
         category="conversation",
+    ))
+
+    # 14. web_fetch (safe URL text extraction with strict SSRF protection)
+    async def handle_web_fetch(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+        url = str(args.get("url") or "").strip()
+        max_chars = int(args.get("max_chars") or 4000)
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, fetch_url_safely, url, 8.0, max_chars)
+        return res
+
+    registry.register(ToolSpec(
+        name="web_fetch",
+        description=(
+            "Fetch and extract readable text from a specific public HTTP or HTTPS web page URL with SSRF protection. "
+            "WHEN to use: When the user provides a specific URL to read, summarize, or extract data from, or when deep content from a search result URL is needed. "
+            "WHEN NOT to use: For broad open queries without a target URL (use web_research instead), or for live DOM interaction/forms (use browser_actions). "
+            "Example: web_fetch(url='https://en.wikipedia.org/wiki/Artificial_intelligence')"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The HTTP or HTTPS URL to fetch and extract content from."},
+                "max_chars": {"type": "integer", "description": "Maximum characters of text content to extract (default 4000)."},
+            },
+            "required": ["url"],
+        },
+        handler=handle_web_fetch,
+        risk=RISK_READ,
+        allowed_channels=("hud", "voice", "whatsapp"),
+        timeout_s=10.0,
+        untrusted_result=True,
+        parallel_safe=True,
+        category="research",
+    ))
+
+    # 15. calculate (safe AST math evaluator & unit conversion without eval/exec)
+    async def handle_calculate(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+        expr = str(args.get("expression") or "").strip()
+        return safe_calculate(expr)
+
+    registry.register(ToolSpec(
+        name="calculate",
+        description=(
+            "Safely evaluate a mathematical expression or unit conversion using a restricted AST evaluator without eval/exec. "
+            "WHEN to use: When solving arithmetic, algebraic formulas, percentage calculations, or converting units (length, weight, temperature, data, speed, time). "
+            "WHEN NOT to use: For simple mental arithmetic that does not need verification, or non-mathematical string manipulation. "
+            "Example: calculate(expression='(45 * 12) / 3 + sqrt(144)')"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Mathematical expression (e.g. '(45 * 12) / 3', 'sqrt(144) + 10') or unit conversion (e.g. '100 km to miles', '32 fahrenheit in celsius').",
+                },
+            },
+            "required": ["expression"],
+        },
+        handler=handle_calculate,
+        risk=RISK_READ,
+        allowed_channels=("hud", "voice", "whatsapp"),
+        timeout_s=3.0,
+        untrusted_result=False,
+        parallel_safe=True,
+        category="action",
     ))
 
     return registry

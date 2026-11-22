@@ -853,8 +853,13 @@ class AgentOrchestrator:
                     if res.get("ref_id"):
                         ref_id = res["ref_id"]
 
+                if tc.name == "web_fetch":
+                    await self._emit_event(on_event, {"type": "status", "status": "fetching web page"})
+                    if res.get("url") and res.get("status") == "success":
+                        collected_sources.append({"title": res.get("title") or res["url"], "url": res["url"]})
+
                 is_untrusted = bool(getattr(spec, "untrusted_result", False))
-                if is_untrusted and tc.name in ("whatsapp_read", "whatsapp_read_messages", "whatsapp_search"):
+                if is_untrusted and tc.name in ("whatsapp_read", "whatsapp_read_messages", "whatsapp_search", "web_fetch"):
                     untrusted_taint = True
                 fenced = fence_tool_result(tc.name, res, untrusted=is_untrusted)
                 step_tool_blocks.append(fenced)

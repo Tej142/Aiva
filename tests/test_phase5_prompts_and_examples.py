@@ -110,7 +110,7 @@ class TestPhase5PromptsAndExamples(unittest.TestCase):
         )
 
         tools = registry.list_specs()
-        self.assertEqual(len(tools), 18, f"Expected 18 builtin tools, found {len(tools)}")
+        self.assertEqual(len(tools), 20, f"Expected 20 builtin tools (including web_fetch and calculate), found {len(tools)}")
 
         for tool in tools:
             desc = tool.description

@@ -443,6 +443,35 @@ class _GoldenEvalStubLLM:
                 model="eval-stub",
             )
 
+        # Phase 8 Safe Capabilities (web_fetch and calculate)
+        if "fetch http://" in low or "fetch https://" in low:
+            m_url = re.search(r"(https?://[^\s\"'>]+)", orig_query)
+            target_url = m_url.group(1) if m_url else "https://example.com"
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_p8_wf", name="web_fetch", arguments={"url": target_url})],
+                provider="stub",
+                model="eval-stub",
+            )
+
+        if "calculate" in low:
+            expr = orig_query
+            if "calculate" in low:
+                expr = orig_query[low.index("calculate") + len("calculate"):].strip()
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_p8_calc", name="calculate", arguments={"expression": expr})],
+                provider="stub",
+                model="eval-stub",
+            )
+
+        if "convert 100 km to miles" in low or re.search(r"\bconvert\s+\d+", low):
+            m_conv = re.search(r"convert\s+(.+)$", orig_query, re.IGNORECASE)
+            expr = m_conv.group(1).strip() if m_conv else "100 km to miles"
+            return LLMResponse(
+                tool_calls=[LLMToolCall(id="tc_p8_conv", name="calculate", arguments={"expression": expr})],
+                provider="stub",
+                model="eval-stub",
+            )
+
         # Device / Tanglish device actions
         if "list running apps" in low:
             return LLMResponse(tool_calls=[LLMToolCall(id="tc_apps", name="file_access", arguments={"action": "list_apps"})])
@@ -637,6 +666,23 @@ class _GoldenEvalStubLLM:
             if "salary records" in low_orig or "internal salary" in low_orig:
                 return "I searched for executive records; however, private internal salary records are strictly confidential and not publicly available on the web."
             return f"Here is the verified summary for '{orig_query}': key updates were retrieved cleanly from trusted sources."
+        if 'name="calculate"' in tool_block:
+            m_fmt = re.search(r'"formatted":\s*"([^"]+)"', tool_block)
+            m_res = re.search(r'"result":\s*([0-9.-]+)', tool_block)
+            if m_fmt:
+                return f"The calculation result is {m_fmt.group(1)}."
+            if m_res:
+                return f"The calculation result is {m_res.group(1)}."
+            if m_msg:
+                return m_msg[-1]
+        if 'name="web_fetch"' in tool_block:
+            if '"status": "blocked"' in tool_block or '"error": "ssrf_blocked"' in tool_block:
+                return m_msg[-1] if m_msg else "Access to that URL was blocked for security reasons."
+            m_title = re.search(r'"title":\s*"([^"]+)"', tool_block)
+            m_text = re.search(r'"text":\s*"([^"]+)"', tool_block)
+            title = m_title.group(1) if m_title else "Web page"
+            text_preview = (m_text.group(1)[:200] if m_text else "").replace("\\n", " ")
+            return f"Summary of {title}: {text_preview}"
         if m_msg:
             return " ".join(m_msg)
         return "Done."
