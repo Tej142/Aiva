@@ -404,7 +404,12 @@
       <span class="title-device-tag" id="title-device-name">This PC</span>
     </div>
 
-    <div class="title-center"></div>
+    <div class="title-center">
+      <div id="title-voice-pill" class="connection-pill" style="display: none; border-color: var(--info); color: var(--info); background: var(--status-info-bg);">
+        <span class="status-dot online" style="background: var(--info); animation: pulse 0.8s infinite alternate;"></span>
+        <span id="title-voice-text" style="font-size: 11px; font-weight: 600;">🎙️ LISTENING</span>
+      </div>
+    </div>
 
     <div class="title-right">
       <button class="connection-pill" id="title-wa-pill" type="button" title="WhatsApp Channel Status — click to open pairing &amp; settings" style="cursor: pointer; color: var(--text-secondary);">

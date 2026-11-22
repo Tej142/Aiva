@@ -366,6 +366,7 @@
       this.onTranscriptReady = null;
       this.onSilenceDetected = null;
       this.onVadLevel = null;
+      this.onFrequencyData = null;
       this.onFollowUpCountdown = null;
 
       // Guaranteed cleanup on window unload
@@ -615,6 +616,7 @@
       if (!this.analyser) return;
 
       const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      const freqArray = new Uint8Array(this.analyser.frequencyBinCount);
       this.speechStartedAt = 0;
       this.lastSpeechTime = 0;
       this.isSpeakingDetected = false;
@@ -624,6 +626,7 @@
         if (curState !== VoiceState.LISTENING && curState !== VoiceState.FOLLOW_UP) return;
 
         this.analyser.getByteTimeDomainData(dataArray);
+        this.analyser.getByteFrequencyData(freqArray);
 
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) {
@@ -634,6 +637,10 @@
 
         if (this.onVadLevel) {
           this.onVadLevel(rms);
+        }
+
+        if (this.onFrequencyData) {
+          this.onFrequencyData(freqArray, rms);
         }
 
         const now = performance.now();
@@ -986,6 +993,17 @@
     const captionText = document.getElementById('caption-text');
 
     stateMachine.onStateChange((state, prevState, meta) => {
+      // Broadcast state to parent companion frame if embedded
+      if (window.self !== window.top || document.body.classList.contains('is-embedded')) {
+        try {
+          window.parent.postMessage({
+            type: 'AIVA_VOICE_STATE_CHANGE',
+            state: state,
+            isListening: state === VoiceState.LISTENING || state === VoiceState.FOLLOW_UP
+          }, '*');
+        } catch {}
+      }
+
       // 1. Update Central Orb classes
       if (orb) {
         orb.className = 'neural-core-wrapper';
@@ -1061,6 +1079,131 @@
         }, 3200);
       }
     };
+
+    // 4. Initialize Live Audio Frequency Visualizer Component
+    initAudioFrequencyComponent(sessionManager, stateMachine);
+  }
+
+  function initAudioFrequencyComponent(sessionManager, stateMachine) {
+    const mainContainer = document.getElementById('audio-frequency-component');
+    const mainBarsContainer = document.getElementById('frequency-bars');
+    const statusText = document.getElementById('frequency-status-text');
+    const statusBadge = document.getElementById('frequency-status-badge');
+    const sidebarComponent = document.getElementById('sidebar-freq-component');
+    const sidebarBars = document.getElementById('sidebar-freq-bars');
+    const sidebarDb = document.getElementById('sidebar-freq-db');
+
+    // Create 20 frequency bars for main caption bar
+    const numBars = 20;
+    const mainBarEls = [];
+    if (mainBarsContainer && mainBarsContainer.children.length === 0) {
+      for (let i = 0; i < numBars; i++) {
+        const bar = document.createElement('span');
+        bar.className = 'freq-bar';
+        mainBarsContainer.appendChild(bar);
+        mainBarEls.push(bar);
+      }
+    }
+
+    // Create 12 frequency bars for sidebar component
+    const numSidebarBars = 12;
+    const sidebarBarEls = [];
+    if (sidebarBars && sidebarBars.children.length === 0) {
+      for (let i = 0; i < numSidebarBars; i++) {
+        const bar = document.createElement('span');
+        bar.className = 'sidebar-freq-bar';
+        sidebarBars.appendChild(bar);
+        sidebarBarEls.push(bar);
+      }
+    }
+
+    // Connect real-time frequency handler
+    sessionManager.onFrequencyData = (freqArray, rms) => {
+      const state = stateMachine.getState();
+      const isListening = state === VoiceState.LISTENING || state === VoiceState.FOLLOW_UP;
+      if (!isListening) return;
+
+      // Calculate approximate dBFS from RMS
+      const db = rms > 0 ? Math.max(-60, Math.round(20 * Math.log10(rms))) : -60;
+      if (sidebarDb) {
+        sidebarDb.textContent = `${db} dB`;
+      }
+
+      const isSpeaking = rms > 0.02;
+      if (statusText) {
+        statusText.textContent = isSpeaking ? 'VOICE DETECTED' : (state === VoiceState.FOLLOW_UP ? 'FOLLOW-UP (6s)' : 'LISTENING');
+      }
+      if (statusBadge) {
+        if (isSpeaking) {
+          statusBadge.classList.add('speaking');
+        } else {
+          statusBadge.classList.remove('speaking');
+        }
+      }
+
+      // Update main spectrum bars (focus on speech frequency bins 2..64)
+      if (mainBarEls.length > 0) {
+        const step = Math.max(1, Math.floor(64 / numBars));
+        for (let i = 0; i < numBars; i++) {
+          let sum = 0;
+          const startBin = 2 + (i * step);
+          for (let b = 0; b < step; b++) {
+            sum += freqArray[startBin + b] || 0;
+          }
+          const val = sum / step; // 0..255
+          let scale = (val / 255.0) * 1.5;
+          if (scale < 0.1) {
+            // Ambient idle breathing wave so user sees it is actively listening
+            scale = 0.08 + 0.06 * Math.sin((Date.now() / 150) + (i * 0.4));
+          } else {
+            scale = Math.min(1.0, scale);
+          }
+          mainBarEls[i].style.transform = `scaleY(${scale.toFixed(3)})`;
+        }
+      }
+
+      // Update sidebar spectrum bars
+      if (sidebarBarEls.length > 0) {
+        const step = Math.max(1, Math.floor(64 / numSidebarBars));
+        for (let i = 0; i < numSidebarBars; i++) {
+          let sum = 0;
+          const startBin = 2 + (i * step);
+          for (let b = 0; b < step; b++) {
+            sum += freqArray[startBin + b] || 0;
+          }
+          const val = sum / step;
+          let scale = (val / 255.0) * 1.5;
+          if (scale < 0.1) {
+            scale = 0.08 + 0.05 * Math.sin((Date.now() / 180) + (i * 0.5));
+          } else {
+            scale = Math.min(1.0, scale);
+          }
+          sidebarBarEls[i].style.transform = `scaleY(${scale.toFixed(3)})`;
+        }
+      }
+    };
+
+    // State change transitions
+    stateMachine.onStateChange((state) => {
+      const isListening = state === VoiceState.LISTENING || state === VoiceState.FOLLOW_UP;
+      if (mainContainer) {
+        if (isListening) {
+          mainContainer.classList.remove('hidden');
+        } else {
+          mainContainer.classList.add('hidden');
+          mainBarEls.forEach(bar => { bar.style.transform = 'scaleY(0.08)'; });
+        }
+      }
+      if (sidebarComponent) {
+        if (isListening) {
+          sidebarComponent.classList.remove('hidden');
+        } else {
+          sidebarComponent.classList.add('hidden');
+          sidebarBarEls.forEach(bar => { bar.style.transform = 'scaleY(0.08)'; });
+          if (sidebarDb) sidebarDb.textContent = '-- dB';
+        }
+      }
+    });
   }
 
   // 10. Runtime Instantiation & Export

@@ -8,3 +8,4 @@ print(f"Testing login at {base_url} with {email}")
 resp = requests.post(f"{base_url}/api/auth/login", json={"email": email}, timeout=10)
 print(f"Status: {resp.status_code}")
 print(f"Response: {resp.text}")
+

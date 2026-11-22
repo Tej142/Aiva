@@ -87,6 +87,14 @@
                 <span class="mic-icon">🎙</span>
                 <span id="voice-btn-label">Voice Active</span>
             </button>
+            <!-- Audio Frequency Component (Sidebar Monitor) -->
+            <div id="sidebar-freq-component" class="sidebar-freq-component hidden" aria-label="Microphone frequency spectrum">
+                <div class="sidebar-freq-header">
+                    <span class="sidebar-freq-label">MIC FREQUENCY</span>
+                    <span class="sidebar-freq-db" id="sidebar-freq-db">-- dB</span>
+                </div>
+                <div class="sidebar-freq-bars" id="sidebar-freq-bars"></div>
+            </div>
         </div>
 
     </aside>
@@ -168,11 +176,19 @@
                     </div>
                 </div>
 
-                <!-- Voice Caption Bar -->
+                <!-- Voice Caption Bar & Audio Frequency Component -->
                 <div id="voice-caption-bar" class="voice-caption-bar hidden">
                     <div class="caption-pulse"></div>
                     <span class="caption-speaker" id="caption-speaker">AIVA</span>
                     <span class="caption-text" id="caption-text">Listening...</span>
+                    <!-- Audio Frequency Visualizer Component -->
+                    <div id="audio-frequency-component" class="audio-frequency-component hidden" title="Live Audio Frequency Spectrum" aria-label="Audio frequency spectrum visualizer">
+                        <div class="frequency-bars" id="frequency-bars"></div>
+                        <span class="frequency-status-badge" id="frequency-status-badge">
+                            <span class="freq-live-dot"></span>
+                            <span id="frequency-status-text">LISTENING</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="chat-input-bar">
                     <button class="icon-btn" id="btn-screen-context" title="Attach screen context">

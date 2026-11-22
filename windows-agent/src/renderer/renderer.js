@@ -600,6 +600,19 @@ async function initMainView() {
       if (window.aivaAgent && window.aivaAgent.switchView) {
         window.aivaAgent.switchView('login').catch(() => {});
       }
+    } else if (event.data && event.data.type === 'AIVA_VOICE_STATE_CHANGE') {
+      const titleVoicePill = document.getElementById('title-voice-pill');
+      const titleVoiceText = document.getElementById('title-voice-text');
+      if (titleVoicePill) {
+        if (event.data.isListening) {
+          titleVoicePill.style.display = 'inline-flex';
+          if (titleVoiceText) {
+            titleVoiceText.textContent = event.data.state === 'follow_up' ? '🎙️ FOLLOW-UP' : '🎙️ LISTENING';
+          }
+        } else {
+          titleVoicePill.style.display = 'none';
+        }
+      }
     } else if (event.data && event.data.type === 'AIVA_WHATSAPP_STATUS') {
       const msg = event.data;
       if (titleWaDot) {
