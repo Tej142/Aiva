@@ -278,6 +278,30 @@ class _GoldenEvalStubLLM:
                 model="eval-stub",
             )
 
+        if "wal mode" in low or "write ahead logging" in low or "sqlite wal" in low:
+            return LLMResponse(
+                text=(
+                    "SQLite WAL mode appends changes to a separate write-ahead log file instead of the main database. "
+                    "This allows readers to access the database concurrently while a write transaction is occurring. "
+                    "Transactions commit instantly by flushing changes to the WAL file. "
+                    "A checkpoint operation periodically transfers the WAL log content back into the database file. "
+                    "This architecture minimizes lock contention and boosts overall write throughput dramatically."
+                ),
+                provider="stub",
+                model="eval-stub",
+            )
+
+        if "tell me more" in low or "more details" in low:
+            return LLMResponse(
+                text=(
+                    "Transactions commit instantly by flushing changes to the WAL file. "
+                    "A checkpoint operation periodically transfers the WAL log content back into the database file. "
+                    "This architecture minimizes lock contention and boosts overall write throughput."
+                ),
+                provider="stub",
+                model="eval-stub",
+            )
+
         if "migration architecture" in low or "zero downtime" in low:
             return LLMResponse(
                 text=(
@@ -665,6 +689,11 @@ def _evaluate_case(case: Dict[str, Any], outcome: Dict[str, Any], spies: _SpyCap
     for sub in case.get("must_not_contain") or []:
         if sub.lower() in resp_lower:
             reasons.append(f"response unexpectedly contained '{sub}': {outcome.get('response')!r}")
+
+    speech_lower = str(outcome.get("speech_text") or "").lower()
+    for sub in case.get("speech_must_contain") or []:
+        if sub.lower() not in speech_lower:
+            reasons.append(f"speech_text missing '{sub}': {outcome.get('speech_text')!r}")
 
     return len(reasons) == 0, reasons
 

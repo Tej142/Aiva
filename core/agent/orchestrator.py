@@ -18,7 +18,12 @@ from core.agent.prompts import (
     get_tier2_prompt_template,
 )
 from core.agent.router import TieredRouter
-from core.agent.shaper import normalize_sources, shape_response
+from core.agent.shaper import (
+    get_next_details_chunk,
+    is_details_followup_phrase,
+    normalize_sources,
+    shape_response,
+)
 from core.agent.telemetry import (
     TelemetryRecorder,
     log_agent,
@@ -221,6 +226,9 @@ class AgentOrchestrator:
         self.router = router or TieredRouter()
         # Strict per-(user_id, session_id) confirmation slots so users never collide
         self._pending_confirmations: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # Voice follow-up details cache (Phase 7: short voice, full detail on screen)
+        self._voice_followup_details: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._last_voice_turn_by_user: Dict[str, Dict[str, Any]] = {}
 
     async def _emit_event(self, on_event: Optional[Callable[[Dict[str, Any]], Any]], payload: Dict[str, Any]) -> None:
         if not on_event:
@@ -440,6 +448,41 @@ class AgentOrchestrator:
                     "should_continue": True,
                     "should_end_session": False,
                 }
+
+        # 1.5. Voice follow-up details handling (Phase 7: "yes/details/tell me more in the FOLLOW_UP window")
+        if str(channel).lower() == "voice" and (ctx_key in self._voice_followup_details or uid_key in self._last_voice_turn_by_user):
+            details_ctx = self._voice_followup_details.pop(ctx_key, None) or self._last_voice_turn_by_user.get(uid_key)
+            if details_ctx:
+                is_expired = time.time() > float(details_ctx.get("expires_at", 0))
+                if not is_expired and is_details_followup_phrase(raw_in):
+                    self._last_voice_turn_by_user.pop(uid_key, None)
+                    chunk = get_next_details_chunk(
+                        details_ctx.get("full_text", ""),
+                        already_spoken_sentences=int(details_ctx.get("sentences_spoken", 2)),
+                        max_sentences=4,
+                    )
+                    total_ms = (time.perf_counter() - t0) * 1000
+                    self.telemetry.record(user_id=user_id, tier=0, channel="voice", tag="conversation", total_ms=total_ms)
+                    self._observe_turn(
+                        user_id=user_id,
+                        user_input=raw_in,
+                        reply_text=chunk,
+                        channel="voice",
+                        session_id=session_id,
+                    )
+                    return {
+                        "text": chunk,
+                        "response": chunk,
+                        "speech_text": chunk,
+                        "tier": 0,
+                        "tag": "conversation",
+                        "tools": [],
+                        "route": "details_followup",
+                        "should_continue": True,
+                        "should_end_session": False,
+                        "expect_followup": True,
+                        "timings": {"total_ms": round(total_ms, 1)},
+                    }
 
         # 2. Hot-path memory & identity commands (<10ms deterministic)
         if self.memory_engine and user_id:
@@ -881,6 +924,17 @@ class AgentOrchestrator:
             tools=tools_used,
             success=ok,
         )
+
+        if str(channel).lower() == "voice" and shaped.get("has_details"):
+            details_record = {
+                "full_text": final_text,
+                "sentences_spoken": 2,
+                "expires_at": time.time() + 60.0,
+            }
+            self._voice_followup_details[ctx_key] = details_record
+            if uid_key != "anonymous":
+                self._last_voice_turn_by_user[uid_key] = details_record
+
         self._observe_turn(
             user_id=user_id,
             user_input=raw_in,

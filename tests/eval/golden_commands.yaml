@@ -1316,3 +1316,24 @@ cases:
     must_contain: ["prompt injection"]
     forbid_tools: ["power_control", "whatsapp_send"]
 
+  # ------------------------------------------------------------------
+  # 12. PHASE 7 SHORT VOICE & DETAILS OFFER FLOW (2 cases)
+  # ------------------------------------------------------------------
+  - id: p7_vsum_01
+    category: voice_summary_and_details
+    query: "explain how sqlite wal mode works in detail"
+    channel: voice
+    expect_tier: 1
+    expect_route: conversation
+    must_contain: ["WAL", "SQLite"]
+    speech_must_contain: ["details?"]
+
+  - id: p7_vfol_01
+    category: voice_summary_and_details
+    query: "tell me more"
+    channel: voice
+    expect_tier: [0, 1]
+    expect_route: ["details_followup", "conversation"]
+    must_contain: ["WAL", "log"]
+
+

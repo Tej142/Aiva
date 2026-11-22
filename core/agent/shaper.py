@@ -60,6 +60,80 @@ def pop_complete_sentences(buffer: str) -> tuple[List[str], str]:
     return ready, parts[-1]
 
 
+DETAILS_OFFER = "Want the details?"
+
+
+def is_longer_or_richer_than_spoken(full_text: str, spoken_text: str) -> bool:
+    """Check if the full response has more detail or richer structure than the spoken summary."""
+    full_clean = (full_text or "").strip()
+    spoken_clean = (spoken_text or "").strip()
+    if not full_clean:
+        return False
+    # Check if there are more sentences than the spoken summary
+    full_sents = split_sentences(sanitize_for_speech(full_clean))
+    spoken_sents = split_sentences(spoken_clean)
+    if len(full_sents) > len(spoken_sents):
+        return True
+    # Check length difference (more than ~40 characters beyond spoken summary)
+    if len(full_clean) > len(spoken_clean) + 40:
+        return True
+    # Check structured markdown content (lists, code blocks, tables, headers)
+    if any(m in full_clean for m in ("```", "\n- ", "\n* ", "\n1. ", "\n2. ", "###", "##", "|")):
+        return True
+    return False
+
+
+def append_details_offer(spoken_text: str) -> str:
+    """Append a brief offer like 'Want the details?' to a spoken summary."""
+    clean = (spoken_text or "").strip()
+    if not clean:
+        return ""
+    # Avoid duplicate offer if text already ends with an offer
+    low = clean.lower()
+    if any(q in low for q in ("want the details", "want more details", "would you like more details", "tell you more")):
+        return clean
+    if clean[-1] not in ".!?":
+        clean += "."
+    return f"{clean} {DETAILS_OFFER}"
+
+
+def get_next_details_chunk(
+    full_text: str,
+    already_spoken_sentences: int = 2,
+    max_sentences: int = 4,
+) -> str:
+    """Extract the next chunk of detail sentences (max ~4 sentences) for voice follow-up."""
+    spoken = sanitize_for_speech(full_text or "")
+    sents = split_sentences(spoken)
+    if not sents:
+        return "Done."
+    if len(sents) <= already_spoken_sentences:
+        remaining = sents[already_spoken_sentences:] if len(sents) > already_spoken_sentences else sents
+        res = " ".join(remaining).strip()
+        return res or spoken
+    chunk = sents[already_spoken_sentences : already_spoken_sentences + max_sentences]
+    res = " ".join(chunk).strip()
+    if res and res[-1] not in ".!?":
+        res += "."
+    return res
+
+
+def is_details_followup_phrase(text: str) -> bool:
+    """Detect if user is asking for more details in response to an offer."""
+    clean = re.sub(r"[^a-z\s]", "", str(text or "").lower()).strip()
+    exact_matches = {
+        "yes", "yeah", "yep", "sure", "details", "tell me more",
+        "more details", "want details", "give me details", "give me the details",
+        "tell me the details", "yes please", "yes tell me", "sure tell me more",
+        "more", "go on", "continue", "tell me", "please",
+    }
+    if clean in exact_matches:
+        return True
+    if any(k in clean for k in ("tell me more", "more details", "the details", "give me details", "want details")):
+        return True
+    return False
+
+
 def shape_for_voice(text: str, max_sentences: int = 2, max_chars: int = 260) -> str:
     """Shape any response into at most `max_sentences` crisp natural spoken sentences."""
     spoken = sanitize_for_speech(text or "", max_chars=max(max_chars, 260))
@@ -103,12 +177,15 @@ def shape_response(
     norm_sources = normalize_sources(sources)
 
     if chan == "voice":
-        spoken = shape_for_voice(raw, max_sentences=2, max_chars=260)
+        spoken_summary = shape_for_voice(raw, max_sentences=2, max_chars=260)
+        is_richer = is_longer_or_richer_than_spoken(raw, spoken_summary)
+        spoken_final = append_details_offer(spoken_summary) if is_richer else spoken_summary
         return {
-            "text": spoken,
-            "speech_text": spoken,
+            "text": raw,                  # Requirement 1: full answer appears on the HUD!
+            "speech_text": spoken_final,   # Requirement 1: <= 2 sentence summary (+ offer if richer)
             "sources": norm_sources,
             "channel": chan,
+            "has_details": is_richer,
         }
 
     if chan == "whatsapp":
