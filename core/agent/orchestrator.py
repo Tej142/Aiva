@@ -377,6 +377,11 @@ class AgentOrchestrator:
         untrusted_taint = False
         research_calls_done = 0
         final_text = ""
+        tier1_reasoning = (
+            self.llm_gateway.get_tier1_reasoning()
+            if hasattr(self.llm_gateway, "get_tier1_reasoning")
+            else "low"
+        )
 
         await self._emit_event(on_event, {"type": "status", "status": "thinking"})
 
@@ -394,11 +399,18 @@ class AgentOrchestrator:
                 stream_deltas.append(tok)
                 await self._emit_event(on_event, {"type": "delta", "delta": tok})
 
+            step_effort = tier1_reasoning if current_tier == 1 else (
+                self.llm_gateway.get_tier2_reasoning()
+                if hasattr(self.llm_gateway, "get_tier2_reasoning")
+                else "medium"
+            )
+
             try:
                 llm_resp = await self.llm_gateway.complete(
                     messages,
                     tools=channel_tools,
                     tier=current_tier,
+                    reasoning_effort=step_effort,
                     stream=True,
                     on_delta=_on_delta if on_event else None,
                     timeout_s=step_timeout,
@@ -525,7 +537,11 @@ class AgentOrchestrator:
                     early_return_prompt = res.get("message") or "Please say 'confirm' to proceed."
                     break
 
-                if res.get("status") == "validation_error":
+                tool_status = res.get("status")
+                if tool_status in ("ambiguous", "validation_error", "error", "failed"):
+                    tier1_reasoning = "medium"
+
+                if tool_status == "validation_error":
                     validation_errors += 1
                     if validation_errors >= 2 and current_tier < 2:
                         current_tier = 2

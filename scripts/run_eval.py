@@ -109,9 +109,11 @@ class _GoldenEvalStubLLM:
         *,
         tools: Optional[List[Dict[str, Any]]] = None,
         tier: int = 1,
+        reasoning_effort: Optional[str] = None,
         stream: bool = False,
         on_delta=None,
         timeout_s: float = 20.0,
+        **kwargs: Any,
     ) -> LLMResponse:
         sys_prompt = messages[0].get("content", "") if messages else ""
         last = messages[-1].get("content", "") if messages else ""

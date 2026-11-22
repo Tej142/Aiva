@@ -3,9 +3,10 @@
 import asyncio
 from dataclasses import dataclass, field
 import json
+import os
 import re
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from core.agent.telemetry import log_agent
 from core.shared.config_loader import load_secrets
@@ -98,11 +99,37 @@ class LLMGateway:
 
     @classmethod
     def get_tier1_models(cls) -> List[str]:
+        raw = os.getenv("AIVA_TIER1_MODELS", "").strip()
+        if raw:
+            models = [m.strip() for m in raw.split(",") if m.strip()]
+            if models:
+                return models
         return list(cls.TIER1_GROQ_MODELS)
 
     @classmethod
     def get_tier2_models(cls) -> List[str]:
+        raw = os.getenv("AIVA_TIER2_MODELS", "").strip()
+        if raw:
+            models = [m.strip() for m in raw.split(",") if m.strip()]
+            if models:
+                return models
         return list(cls.TIER2_GEMINI_MODELS)
+
+    @classmethod
+    def get_tier1_reasoning(cls) -> str:
+        return os.getenv("AIVA_TIER1_REASONING", "low").strip() or "low"
+
+    @classmethod
+    def get_tier2_reasoning(cls) -> str:
+        return os.getenv("AIVA_TIER2_REASONING", "medium").strip() or "medium"
+
+    @classmethod
+    def get_cooldown_seconds(cls) -> float:
+        raw = os.getenv("AIVA_429_COOLDOWN_S") or os.getenv("AIVA_COOLDOWN_SECONDS") or "60"
+        try:
+            return max(1.0, float(raw))
+        except (ValueError, TypeError):
+            return 60.0
 
     def __init__(self, secrets: Optional[Dict[str, Any]] = None):
         cfg = secrets if secrets is not None else load_secrets()
@@ -122,6 +149,20 @@ class LLMGateway:
         self._gemini_idx = 0
         self._mistral_idx = 0
         self._provider_cooldown: Dict[str, float] = {}
+        self._key_cooldown: Dict[Tuple[str, str, str], float] = {}
+
+    def is_key_on_cooldown(self, provider: str, key: str, model: str) -> bool:
+        return time.monotonic() < self._key_cooldown.get((provider, key, model), 0.0)
+
+    def mark_key_cooldown(self, provider: str, key: str, model: str, duration_s: Optional[float] = None) -> float:
+        dur = self.get_cooldown_seconds() if duration_s is None else float(duration_s)
+        self._key_cooldown[(provider, key, model)] = time.monotonic() + dur
+        log_agent("key_cooldown", 0.0, "retry", provider=provider, model=model, duration_s=dur)
+        return dur
+
+    def clear_cooldowns(self) -> None:
+        self._key_cooldown.clear()
+        self._provider_cooldown.clear()
 
     def _make_groq_client(self, api_key: str):
         from groq import AsyncGroq
@@ -148,6 +189,7 @@ class LLMGateway:
         *,
         tools: Optional[List[Dict[str, Any]]] = None,
         tier: int = 1,
+        reasoning_effort: Optional[str] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Any]] = None,
         temperature: float = 0.35,
@@ -175,13 +217,14 @@ class LLMGateway:
         for prov in providers:
             try:
                 if prov == "groq" and self.groq_keys:
-                    models = self.TIER2_GROQ_MODELS if tier >= 2 else self.TIER1_GROQ_MODELS
+                    models = [m for m in self.get_tier2_models() if "gemini" not in m.lower()] or list(self.TIER2_GROQ_MODELS) if tier >= 2 else self.get_tier1_models()
                     return await asyncio.wait_for(
                         self._call_groq(
                             messages=messages,
                             tools=tools,
-                            models=models,
+                            models=tuple(models),
                             tier=tier,
+                            reasoning_effort=reasoning_effort,
                             stream=stream,
                             on_delta=on_delta,
                             temperature=temperature,
@@ -215,7 +258,7 @@ class LLMGateway:
                 last_err = err
                 err_low = str(err).lower()
                 if any(m in err_low for m in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
-                    self._provider_cooldown[prov] = time.monotonic() + 25.0
+                    self._provider_cooldown[prov] = time.monotonic() + self.get_cooldown_seconds()
                 log_agent("llm_failover", 0.0, "retry", provider=prov, err=type(err).__name__)
                 continue
 
@@ -228,6 +271,7 @@ class LLMGateway:
         tools: Optional[List[Dict[str, Any]]],
         models: tuple,
         tier: int = 1,
+        reasoning_effort: Optional[str] = None,
         stream: bool,
         on_delta: Optional[Callable[[str], Any]],
         temperature: float,
@@ -236,11 +280,19 @@ class LLMGateway:
         t0 = time.perf_counter()
         n_keys = len(self.groq_keys)
         last_err: Optional[Exception] = None
+        effort = reasoning_effort or (self.get_tier1_reasoning() if tier == 1 else self.get_tier2_reasoning())
 
         for model in models:
-            for offset in range(n_keys):
+            eligible_offsets = [
+                offset for offset in range(n_keys)
+                if not self.is_key_on_cooldown("groq", self.groq_keys[(self._groq_idx + offset) % n_keys], model)
+            ]
+            offsets_to_try = eligible_offsets if eligible_offsets else list(range(n_keys))
+
+            for offset in offsets_to_try:
                 k_idx = (self._groq_idx + offset) % n_keys
-                client = self._make_groq_client(self.groq_keys[k_idx])
+                key = self.groq_keys[k_idx]
+                client = self._make_groq_client(key)
                 try:
                     kwargs: Dict[str, Any] = {
                         "model": model,
@@ -248,8 +300,8 @@ class LLMGateway:
                         "temperature": temperature,
                         "max_completion_tokens": max_tokens,
                     }
-                    if tier == 1 and "gpt-oss" in model:
-                        kwargs["reasoning_effort"] = "low"
+                    if "gpt-oss" in model:
+                        kwargs["reasoning_effort"] = effort
                     if tools:
                         kwargs["tools"] = tools
                         kwargs["tool_choice"] = "auto"
@@ -330,6 +382,9 @@ class LLMGateway:
                     if _is_model_unavailable_error(err):
                         break  # Try next fallback model without burning remaining keys
                     if _is_rotatable_error(err):
+                        err_low = str(err).lower()
+                        if any(m in err_low for m in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
+                            self.mark_key_cooldown("groq", key, model)
                         continue  # Rotate to next key on this model
                 finally:
                     close_fn = getattr(client, "close", None)
@@ -381,7 +436,10 @@ class LLMGateway:
             except Exception:
                 cfg_arg = None
 
-            for gem_model in self.TIER2_GEMINI_MODELS:
+            gem_models = [m for m in self.get_tier2_models() if "gemini" in m.lower()] or list(self.TIER2_GEMINI_MODELS)
+            for gem_model in gem_models:
+                if self.is_key_on_cooldown("gemini", key, gem_model):
+                    continue
                 try:
                     def _invoke(m=gem_model):
                         if cfg_arg is not None:
@@ -441,6 +499,9 @@ class LLMGateway:
                     if _is_model_unavailable_error(err):
                         continue
                     if _is_rotatable_error(err):
+                        err_low = str(err).lower()
+                        if any(m in err_low for m in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
+                            self.mark_key_cooldown("gemini", key, gem_model)
                         break
         raise RuntimeError(f"Gemini pool exhausted: {last_err}")
 
@@ -460,12 +521,15 @@ class LLMGateway:
         for offset in range(n_keys):
             k_idx = (self._mistral_idx + offset) % n_keys
             key = self.mistral_keys[k_idx]
+            model = self.MISTRAL_MODELS[0]
+            if self.is_key_on_cooldown("mistral", key, model):
+                continue
             try:
                 client = self._make_mistral_client(key)
 
                 def _invoke():
                     kw: Dict[str, Any] = {
-                        "model": self.MISTRAL_MODELS[0],
+                        "model": model,
                         "messages": messages,
                         "temperature": temperature,
                     }
@@ -495,7 +559,7 @@ class LLMGateway:
                     text=text_out,
                     tool_calls=parsed_calls,
                     provider="mistral",
-                    model=self.MISTRAL_MODELS[0],
+                    model=model,
                     first_token_ms=round(first_token_ms, 2),
                     total_ms=round((time.perf_counter() - t0) * 1000, 2),
                     finish_reason="tool_calls" if parsed_calls else "stop",
@@ -504,6 +568,9 @@ class LLMGateway:
             except Exception as err:
                 last_err = err
                 if _is_rotatable_error(err):
+                    err_low = str(err).lower()
+                    if any(m in err_low for m in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
+                        self.mark_key_cooldown("mistral", key, model)
                     continue
         raise RuntimeError(f"Mistral pool exhausted: {last_err}")
 
