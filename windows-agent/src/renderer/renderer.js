@@ -591,6 +591,15 @@ async function initMainView() {
       } catch (err) {
         console.warn('Error bridging auth session to iframe:', err);
       }
+    } else if (event.data && event.data.type === 'AIVA_TOKENS_REFRESHED') {
+      if (event.data.tokens && window.aivaAgent && window.aivaAgent.saveTokens) {
+        window.aivaAgent.saveTokens(event.data.tokens).catch(() => {});
+      }
+    } else if (event.data && event.data.type === 'AIVA_AUTH_EXPIRED') {
+      console.warn('[SSO] Authentication expired in embedded HUD, returning to login screen.');
+      if (window.aivaAgent && window.aivaAgent.switchView) {
+        window.aivaAgent.switchView('login').catch(() => {});
+      }
     } else if (event.data && event.data.type === 'AIVA_WHATSAPP_STATUS') {
       const msg = event.data;
       if (titleWaDot) {

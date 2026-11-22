@@ -897,7 +897,7 @@ def api_status():
 # =====================================================================
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip()
     name = data.get("name", "").strip()
     if not email:
@@ -913,7 +913,7 @@ def auth_register():
 
 @app.route("/api/auth/login", methods=["POST"])
 def auth_login():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip()
     if not email:
         return jsonify({"status": "error", "message": "Email address is required."}), 400
@@ -928,7 +928,7 @@ def auth_login():
 
 @app.route("/api/auth/verify-otp", methods=["POST"])
 def auth_verify_otp():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip()
     otp = str(data.get("otp", "")).strip()
     name = data.get("name", "").strip()
@@ -947,12 +947,19 @@ def auth_verify_otp():
         "tokens": result["tokens"]
     }))
 
-    # Set cookie for shared browser/Electron session
+    # Set cookies for shared browser/Electron session
     response.set_cookie(
         "aiva_access_token",
         result["tokens"]["access_token"],
         max_age=result["tokens"]["expires_in"],
         httponly=False,
+        samesite="Lax"
+    )
+    response.set_cookie(
+        "aiva_refresh_token",
+        result["tokens"]["refresh_token"],
+        max_age=30 * 86400,
+        httponly=True,
         samesite="Lax"
     )
     return response
@@ -961,7 +968,7 @@ def auth_verify_otp():
 @app.route("/api/auth/onboarding", methods=["POST"])
 @require_auth
 def auth_onboarding(user):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     db.update_user(user["id"], name=name or None, onboarded=1)
     return jsonify({"status": "success", "message": "Onboarding completed successfully."})
@@ -969,7 +976,7 @@ def auth_onboarding(user):
 
 @app.route("/api/auth/refresh", methods=["POST"])
 def auth_refresh():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     refresh_token = data.get("refresh_token") or request.cookies.get("aiva_refresh_token")
 
     if not refresh_token:
@@ -991,18 +998,26 @@ def auth_refresh():
         httponly=False,
         samesite="Lax"
     )
+    response.set_cookie(
+        "aiva_refresh_token",
+        tokens["refresh_token"],
+        max_age=30 * 86400,
+        httponly=True,
+        samesite="Lax"
+    )
     return response
 
 
 @app.route("/api/auth/logout", methods=["POST"])
 def auth_logout():
-    data = request.json or {}
-    refresh_token = data.get("refresh_token")
+    data = request.get_json(silent=True) or {}
+    refresh_token = data.get("refresh_token") or request.cookies.get("aiva_refresh_token")
     if refresh_token:
         auth_service.revoke_refresh_token(refresh_token)
 
     response = make_response(jsonify({"status": "success", "message": "Logged out successfully."}))
     response.delete_cookie("aiva_access_token")
+    response.delete_cookie("aiva_refresh_token")
     return response
 
 
@@ -1056,7 +1071,7 @@ def get_devices(user):
 @app.route("/api/devices/register", methods=["POST"])
 @require_auth
 def register_device(user):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     name = data.get("name") or "Windows PC"
     platform_str = data.get("platform") or "windows"
     app_version = data.get("app_version") or "1.0.0"

@@ -164,6 +164,14 @@ async function refreshAccessToken() {
             const data = await resp.json();
             if (data.tokens && data.tokens.access_token) {
                 setTokens(data.tokens);
+                if (window.self !== window.top || document.body.classList.contains('is-embedded')) {
+                    try {
+                        window.parent.postMessage({
+                            type: 'AIVA_TOKENS_REFRESHED',
+                            tokens: data.tokens
+                        }, '*');
+                    } catch {}
+                }
                 return data.tokens.access_token;
             }
         }
@@ -176,6 +184,8 @@ async function refreshAccessToken() {
 function setTokens(tokens) {
     if (tokens && tokens.access_token) {
         localStorage.setItem('aiva_access_token', tokens.access_token);
+        const maxAge = tokens.expires_in || 86400;
+        document.cookie = `aiva_access_token=${encodeURIComponent(tokens.access_token)}; path=/; max-age=${maxAge}; SameSite=Lax`;
         if (tokens.refresh_token) {
             localStorage.setItem('aiva_refresh_token', tokens.refresh_token);
         }
@@ -252,7 +262,24 @@ function showWebAuthModal() {
 
 async function checkAuthStatus() {
     try {
-        const resp = await fetch('/api/auth/me', { headers: authHeaders() });
+        let token = getAccessToken();
+        const isEmbedded = window.self !== window.top || document.body.classList.contains('is-embedded');
+        if (!token && isEmbedded) {
+            try {
+                window.parent.postMessage({ type: 'AIVA_REQUEST_AUTH' }, '*');
+                await new Promise(r => setTimeout(r, 200));
+                token = getAccessToken();
+            } catch {}
+        }
+
+        let resp = await fetch('/api/auth/me', { headers: authHeaders() });
+        if (resp.status === 401) {
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+                resp = await fetch('/api/auth/me', { headers: authHeaders() });
+            }
+        }
+
         if (resp.status === 200) {
             const data = await resp.json();
             if (data.user) {
@@ -262,6 +289,13 @@ async function checkAuthStatus() {
         }
     } catch (e) {
         console.warn('Auth check failed:', e);
+    }
+
+    const isEmbedded = window.self !== window.top || document.body.classList.contains('is-embedded');
+    if (isEmbedded) {
+        try {
+            window.parent.postMessage({ type: 'AIVA_AUTH_EXPIRED' }, '*');
+        } catch {}
     }
     showWebAuthModal();
     return false;
@@ -536,6 +570,13 @@ function initWebAuthModal() {
                 } catch {}
                 localStorage.clear();
                 sessionStorage.clear();
+                document.cookie = "aiva_access_token=; path=/; max-age=0";
+                document.cookie = "aiva_refresh_token=; path=/; max-age=0";
+                if (window.self !== window.top || document.body.classList.contains('is-embedded')) {
+                    try {
+                        window.parent.postMessage({ type: 'AIVA_LOGOUT_REQUEST' }, '*');
+                    } catch {}
+                }
                 showWebAuthModal();
             }
         });

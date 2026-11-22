@@ -23,7 +23,7 @@ const store = new SecureStore();
 
 function getServerUrl() {
   const url = store.get('serverUrl');
-  if (!url || url === 'http://localhost:5000' || url.includes('aiva-hub')) {
+  if (!url || url.includes('aiva-hub')) {
     return 'https://aivaserve.duckdns.org';
   }
   return url.replace(/\/+$/, '');
@@ -140,6 +140,7 @@ async function syncSessionCookie(serverUrl, accessToken) {
   if (!serverUrl || !accessToken) return;
   try {
     const u = new URL(serverUrl);
+    const isHttps = u.protocol === 'https:';
     await session.defaultSession.cookies.set({
       url: serverUrl,
       name: 'aiva_access_token',
@@ -147,8 +148,8 @@ async function syncSessionCookie(serverUrl, accessToken) {
       domain: u.hostname,
       path: '/',
       httpOnly: false,
-      secure: u.protocol === 'https:',
-      sameSite: 'no_restriction'
+      secure: isHttps,
+      sameSite: isHttps ? 'no_restriction' : 'lax'
     });
   } catch (cookieErr) {
     console.warn('[SSO] Cookie sync error:', cookieErr);
@@ -202,9 +203,10 @@ function createWindow() {
   });
 
   // Decide initial screen:
+  const accessToken = store.getDecrypted('encryptedAccessToken');
+  const refreshToken = store.getDecrypted('encryptedRefreshToken');
   const deviceToken = store.getDecrypted('encryptedDeviceToken');
-  if (deviceToken) {
-    const accessToken = store.getDecrypted('encryptedAccessToken');
+  if (accessToken || refreshToken || deviceToken) {
     const serverUrl = getServerUrl();
     if (accessToken && serverUrl) {
       syncSessionCookie(serverUrl, accessToken);
@@ -286,6 +288,9 @@ function setupIpcHandlers() {
       store.setEncrypted('encryptedAccessToken', accessToken);
       store.setEncrypted('encryptedRefreshToken', refreshToken);
 
+      // Immediately sync cookie into defaultSession
+      await syncSessionCookie(serverUrl, accessToken);
+
       const gateState = verifyData.user && verifyData.user.gate_state ? verifyData.user.gate_state : 'active';
       if (gateState !== 'active') {
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -300,46 +305,53 @@ function setupIpcHandlers() {
       }
 
       // 2. Register Device on Cloud
-      const computerName = os.hostname() || 'Windows PC';
-      const devResp = await fetch(`${serverUrl}/api/devices/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          name: computerName,
-          platform: 'windows',
-          app_version: app.getVersion() || '1.0.0'
-        })
-      });
-      const devData = await devResp.json();
-      if (devResp.status === 403 && (devData.code === 'verification_required' || devData.code === 'approval_required')) {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('agent:statusChange', { state: 'verification_required', message: 'Verification required' });
+      try {
+        const computerName = os.hostname() || 'Windows PC';
+        const devResp = await fetch(`${serverUrl}/api/devices/register`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({
+            name: computerName,
+            platform: 'windows',
+            app_version: app.getVersion() || '1.0.0'
+          })
+        });
+        const devData = await devResp.json();
+        if (devResp.status === 403 && (devData.code === 'verification_required' || devData.code === 'approval_required')) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('agent:statusChange', { state: 'verification_required', message: 'Verification required' });
+          }
+          return {
+            status: 'success',
+            verification_required: true,
+            gate_state: devData.gate_state || 'number_pending',
+            user: verifyData.user
+          };
         }
-        return {
-          status: 'success',
-          verification_required: true,
-          gate_state: devData.gate_state || 'number_pending',
-          user: verifyData.user
-        };
-      }
-      if (devData.status !== 'success') {
-        return devData;
-      }
+        if (devData.status === 'success' && devData.device && devData.device_token) {
+          store.set('deviceId', devData.device.id);
+          store.set('deviceName', devData.device.name);
+          store.setEncrypted('encryptedDeviceToken', devData.device_token);
 
-      store.set('deviceId', devData.device.id);
-      store.set('deviceName', devData.device.name);
-      store.setEncrypted('encryptedDeviceToken', devData.device_token);
+          // 3. Connect WebSocket immediately
+          if (wsClient) wsClient.connect();
 
-      // 3. Connect WebSocket immediately
-      if (wsClient) wsClient.connect();
+          return {
+            status: 'success',
+            user: verifyData.user,
+            device: devData.device
+          };
+        }
+      } catch (devErr) {
+        console.warn('[Agent] Cloud device registration notice:', devErr.message);
+      }
 
       return {
         status: 'success',
-        user: verifyData.user,
-        device: devData.device
+        user: verifyData.user
       };
 
     } catch (err) {
@@ -607,10 +619,31 @@ function setupIpcHandlers() {
     return { status: 'success' };
   });
 
+  // Auth: Save Tokens (from iframe refresh or verification)
+  ipcMain.handle('auth:saveTokens', async (_event, tokens) => {
+    if (!tokens) return { status: 'error' };
+    if (tokens.access_token) {
+      store.setEncrypted('encryptedAccessToken', tokens.access_token);
+      const serverUrl = getServerUrl();
+      if (serverUrl) {
+        await syncSessionCookie(serverUrl, tokens.access_token);
+      }
+    }
+    if (tokens.refresh_token) {
+      store.setEncrypted('encryptedRefreshToken', tokens.refresh_token);
+    }
+    return { status: 'success' };
+  });
+
   // Navigation
-  ipcMain.handle('view:switch', (_event, viewName) => {
+  ipcMain.handle('view:switch', async (_event, viewName) => {
     if (!mainWindow) return;
     if (viewName === 'hud') {
+      const serverUrl = getServerUrl();
+      const accessToken = store.getDecrypted('encryptedAccessToken');
+      if (serverUrl && accessToken) {
+        await syncSessionCookie(serverUrl, accessToken);
+      }
       mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'main.html'));
     } else if (viewName === 'settings') {
       mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'settings.html'));

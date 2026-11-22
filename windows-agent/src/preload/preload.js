@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('aivaAgent', {
   getMe: () => ipcRenderer.invoke('auth:getMe'),
   logout: () => ipcRenderer.invoke('auth:logout'),
   getTokens: () => ipcRenderer.invoke('auth:getTokens'),
+  saveTokens: (tokens) => ipcRenderer.invoke('auth:saveTokens', tokens),
 
   // Config & Status
   getConfig: () => ipcRenderer.invoke('config:get'),

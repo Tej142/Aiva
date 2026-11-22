@@ -15,8 +15,8 @@ class SecureStore {
       if (fs.existsSync(this.configPath)) {
         const raw = fs.readFileSync(this.configPath, 'utf8');
         const parsed = JSON.parse(raw);
-        // Auto-heal legacy, non-existent, or localhost URLs
-        if (!parsed.serverUrl || parsed.serverUrl.includes('aiva-hub') || parsed.serverUrl === 'http://localhost:5000') {
+        // Auto-heal legacy or non-existent URLs
+        if (!parsed.serverUrl || parsed.serverUrl.includes('aiva-hub')) {
           parsed.serverUrl = DEFAULT_SERVER_URL;
         }
         // Ensure production builds enforce HTTPS if packaged
